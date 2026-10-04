@@ -166,7 +166,7 @@ static void testMenusAndInput() {
   for (const char *level : {"easy","medium","hard"}) {
     Fixture robot; robot.start("1",level); robot.until(Phase::IndexerRelease);
     assert(robot.game.human == 'X' && robot.game.robot == 'O' && discs(robot.game.board) == 0);
-    assert(robot.game.pendingColumn == 3 && !robot.io.pulses[3]);
+    assert(robot.game.pendingColumn == 3 && robot.io.pulses[3]);
     finishRobot(robot); assert(robot.game.board.cells[5][3] == 'O');
     robot.line("1\n"); assert(robot.game.board.cells[5][0] == 'X');
   }
@@ -179,6 +179,23 @@ static void testScheduler() {
   io.time = 600; seq.tick(600); assert(!seq.busy() && !io.enabled && io.writes.size() == 8);
   for (int c = 0; c < 7; ++c) assert(io.writes[c+1].channel == c && io.writes[c+1].time == uint32_t(c*50));
   for (bool pulse : io.pulses) assert(!pulse);
+  // Closing uses the same stagger; delayed ticks never catch up in a burst.
+  {
+    FakeIO closeIO; HatchSequence closing(closeIO); closing.begin(0,1000);
+    for (uint32_t dt = 0; dt <= 600; ++dt) { closeIO.time = 1000+dt; closing.tick(closeIO.time); }
+    assert(closeIO.writes.size() == 7 && !closing.busy());
+    for (int c = 0; c < 7; ++c) {
+      assert(closeIO.writes[c].channel == c);
+      assert(closeIO.writes[c].angle == Config::HATCHES[c].closed);
+      assert(closeIO.writes[c].time == uint32_t(1000+c*50));
+    }
+    closeIO.writes.clear(); closing.begin(1 << 4,2000);
+    closeIO.time = 2000; closing.tick(2000);
+    closeIO.time = 2400; closing.tick(2400);
+    closing.tick(2400); assert(closeIO.writes.size() == 2);
+    closeIO.time = 2449; closing.tick(2449); assert(closeIO.writes.size() == 2);
+    closeIO.time = 2450; closing.tick(2450); assert(closeIO.writes.size() == 3);
+  }
   // Hatch begin must preserve an independently active indexer and its deadline.
   assert(seq.command(7,90,1000)); seq.begin(0,1100); seq.tick(1100);
   assert(io.pulses[7]); seq.tick(1300); assert(!io.pulses[7] && io.enabled);
@@ -194,12 +211,12 @@ static void testSequencing() {
   assert(f.io.writes.size() == 14);
   f.line("4\n"); const auto before = f.game.board; const auto offset = f.io.writes.size();
   f.until(Phase::IndexerLoading);
-  assert(equal(before,f.game.board) && f.events.searches == 1 && indexWrites(f,90) == 1 && indexWrites(f,0) == 0);
-  for (int c = 0; c < 7; ++c) assert(f.io.writes[offset+c].angle == 0);
-  assert(f.io.writes[offset+7].channel == f.game.pendingColumn && f.io.writes[offset+7].angle == 90);
+  assert(equal(before,f.game.board) && f.events.searches == 1 && indexWrites(f,Config::INDEXER.open) == 1 && indexWrites(f,Config::INDEXER.closed) == 0);
+  for (int c = 0; c < 7; ++c) assert(f.io.writes[offset+c].angle == Config::HATCHES[c].closed);
+  assert(f.io.writes[offset+7].channel == f.game.pendingColumn && f.io.writes[offset+7].angle == Config::HATCHES[f.game.pendingColumn].open);
   const uint32_t loadAt = f.io.writes.back().time;
   f.until(Phase::IndexerRelease);
-  assert(f.io.writes.back().channel == 7 && f.io.writes.back().angle == 0);
+  assert(f.io.writes.back().channel == 7 && f.io.writes.back().angle == Config::INDEXER.closed);
   assert(f.io.writes.back().time-loadAt >= 800 && equal(before,f.game.board));
   finishRobot(f);
   const auto after = f.game.board;
@@ -211,7 +228,7 @@ static void testSequencing() {
   Fixture full; full.humanStart();
   for (int r = 0; r < 6; ++r) full.game.board.drop(0,r%2 ? 'X' : 'O');
   full.line("4\n"); full.until(Phase::IndexerRelease); finishRobot(full);
-  assert(full.io.writes[full.io.writes.size()-7].channel == 0 && full.io.writes[full.io.writes.size()-7].angle == 0);
+  assert(full.io.writes[full.io.writes.size()-7].channel == 0 && full.io.writes[full.io.writes.size()-7].angle == Config::HATCHES[0].closed);
 }
 static void testSensorFailures() {
   for (int mode = 0; mode < 7; ++mode) {
@@ -228,11 +245,11 @@ static void testSensorFailures() {
   }
   Fixture early; early.humanStart(); early.line("4\n"); early.until(Phase::IndexerLoading);
   const auto before = early.game.board; early.pulse(uint8_t(early.game.pendingColumn));
-  assert(early.game.phase == Phase::Paused && equal(before,early.game.board) && indexWrites(early,0) == 0);
+  assert(early.game.phase == Phase::Paused && equal(before,early.game.board) && indexWrites(early,Config::INDEXER.closed) == 0);
   Fixture crossing; crossing.humanStart(); crossing.line("4\n"); crossing.until(Phase::IndexerLoading);
   // A pre-release LOW must not become eligible merely because its clear edge is later.
   crossing.edge(uint8_t(crossing.game.pendingColumn),true); crossing.advance(1);
-  crossing.until(Phase::Paused); assert(indexWrites(crossing,0) == 0);
+  crossing.until(Phase::Paused); assert(indexWrites(crossing,Config::INDEXER.closed) == 0);
   Fixture active; active.humanStart(); active.edge(0,true); active.line("4\n"); active.until(Phase::Paused);
   assert(indexWrites(active) == 0);
   // Repeated short noise prevents baseline clear without feeding.

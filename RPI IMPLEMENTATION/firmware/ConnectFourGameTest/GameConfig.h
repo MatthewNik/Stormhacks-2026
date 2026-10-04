@@ -10,6 +10,7 @@ constexpr int BUTTON_LEFT = 13, BUTTON_RIGHT = 14, BUTTON_CENTRE = 23;
 constexpr uint32_t BUTTON_DEBOUNCE_MS = 30;
 constexpr uint32_t OSCILLATOR_HZ = 25000000;
 constexpr float PWM_HZ = 50;
+// Stagger flap command starts by at least 50 ms; motor 7 has separate feed sequencing.
 constexpr uint32_t COMMAND_GAP_MS = 50, SETTLE_MS = 300;
 // Unloaded bench mode: release pulses after travel; do not hold unknown servos indefinitely.
 constexpr uint32_t SERVO_DRIVE_MS = 300;
@@ -23,13 +24,14 @@ constexpr uint32_t STUCK_US = 1000000, BASELINE_TIMEOUT_MS = 2000, PASSAGE_TIMEO
 constexpr uint32_t INDEXER_SETTLE_MS = 300, INDEXER_LOAD_MS = 500;
 constexpr unsigned EDGE_QUEUE_SIZE = 64;
 constexpr int SEARCH_DEPTHS[] = {2, 4, 5};
-// Enable isolated channels only after unloaded position/feedback validation.
-constexpr bool HATCH_ENABLED[7] = {true, true, false, false, false, true, true};
+// All seven hatches enabled after individual unloaded position validation.
+constexpr bool HATCH_ENABLED[7] = {true, true, true, true, true, true, true};
 struct HatchCalibration { uint16_t closed, open, minimumUs, maximumUs; };
-constexpr HatchCalibration INDEXER = {0,90,500,2500}; // release, load, pulse endpoints
-// Entry index is the PCA channel (column minus one). Calibrate each unloaded servo.
+constexpr HatchCalibration INDEXER = {145,80,500,2500}; // release, load, pulse endpoints
+// PCA0 / column 1 is front-right; PCA6 / column 7 is front-left.
+// Down is closed; up is open. Angles use the Uno 500..2500 us mapping.
 constexpr HatchCalibration HATCHES[7] = {
-  {0,90,500,2500}, {0,90,500,2500}, {0,90,500,2500}, {0,90,500,2500},
-  {0,90,500,2500}, {0,90,500,2500}, {0,90,500,2500}
+  {50,140,500,2500}, {60,145,500,2500}, {55,140,500,2500}, {55,147,500,2500},
+  {55,140,500,2500}, {55,141,500,2500}, {70,140,500,2500}
 };
 }

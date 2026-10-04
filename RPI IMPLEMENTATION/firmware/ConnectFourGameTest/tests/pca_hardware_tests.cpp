@@ -31,16 +31,20 @@ int main() {
   assert(io.writeAngle(7,0) && pwmWrites.back().off == 102);
   assert(!io.writeAngle(8,90) && !io.writeAngle(0,181));
   for (uint8_t channel = 2; channel <= 4; ++channel) {
-    assert(io.writeAngle(channel,0) && pwmWrites.back().off == 4096);
-    assert(io.writeAngle(channel,90) && pwmWrites.back().off == 4096);
+    assert(io.writeAngle(channel,0) && pwmWrites.back().off == 102);
+    assert(io.writeAngle(channel,90) && pwmWrites.back().off == 307);
   }
-  // Gameplay owns 0-7; all magazine diagnostics preserve isolated hatch channels.
+  // Gameplay owns 0-7; calibrated hatch channels now receive position pulses.
   HatchSequence hatches(io); QuietEvents events; ClearSensors port; SensorService sensors(port);
   Controller game(hatches,sensors,events);
   game.restart(); game.command("confirm-clear",0); game.command("free",0); game.command("easy",0); game.command("1",0);
   for (uint32_t t = 0; t < 3000; ++t) { events.time = t; game.tick(t); }
   for (size_t i = 16; i < pwmWrites.size(); ++i) assert(pwmWrites[i].channel < 8);
-  for (const auto &write : pwmWrites) if (write.channel >= 2 && write.channel <= 4) assert(write.off == 4096);
+  for (uint8_t channel = 2; channel <= 4; ++channel) {
+    bool moved = false;
+    for (const auto &write : pwmWrites) if (write.channel == channel && write.off != 4096) moved = true;
+    assert(moved);
+  }
   io.enable(true); assert(oeLevel == LOW);
   Wire.ack = false; assert(!io.healthy()); game.fault(); assert(oeLevel == HIGH && game.phase == Phase::Fault);
   Wire.ack = true; game.restart(); assert(game.phase == Phase::Fault && oeLevel == HIGH);

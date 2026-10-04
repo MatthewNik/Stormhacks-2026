@@ -212,7 +212,7 @@ public:
             events.message("Manually deliver ONE robot chip through the pending target sensor now.");
           } else {
             if (!outputs.command(7,Config::INDEXER.open,now)) { fault(); return; }
-            setPhase(Phase::IndexerLoading); events.message("Indexer 90: loading.");
+            setPhase(Phase::IndexerLoading); events.message("Indexer 80: loading.");
           }
         } else if (elapsed >= Config::BASELINE_TIMEOUT_MS) pause("Sensors did not establish a clear baseline");
         break;
@@ -222,7 +222,7 @@ public:
           // The post-write timestamp is conservative: pre-command activity cannot count.
           if (!outputs.command(7,Config::INDEXER.closed,now)) { fault(); return; }
           releaseMs = events.now(); releaseUs = events.nowUs(); setPhase(Phase::IndexerRelease);
-          events.message("Indexer 0: release; waiting for target IR passage.");
+          events.message("Indexer 145: release; waiting for target IR passage.");
         } break;
       case Phase::IndexerRelease:
         if (elapsed >= Config::INDEXER_SETTLE_MS) setPhase(Phase::RobotConfirm); break;
