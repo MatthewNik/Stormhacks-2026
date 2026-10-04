@@ -3,6 +3,7 @@
 #include "Hatch.h"
 #include "Sensors.h"
 #include <string.h>
+#include <stdio.h>
 
 enum class Mode { FreePlay, Coach };
 enum class Phase { AwaitClear, ModeSelect, FirstPlayer, Difficulty, HumanOpening, HumanReady, ClosingForRobot,
@@ -10,6 +11,20 @@ enum class Phase { AwaitClear, ModeSelect, FirstPlayer, Difficulty, HumanOpening
   RobotConfirm, RobotQuiet, RobotClosing, EndClosing, Ended, Stopped, Fault,
   Paused, Correction, ManualBaseline, ManualWait, AwaitCorrection,
   StartupPositioning, HumanBaseline, HumanConfirm, IndexerReset };
+inline const char *phaseName(Phase p) {
+  switch (p) {
+#define PHASE_NAME(name) case Phase::name: return #name
+    PHASE_NAME(AwaitClear); PHASE_NAME(ModeSelect); PHASE_NAME(FirstPlayer); PHASE_NAME(Difficulty);
+    PHASE_NAME(HumanOpening); PHASE_NAME(HumanReady); PHASE_NAME(ClosingForRobot); PHASE_NAME(RobotSearch);
+    PHASE_NAME(RobotOpening); PHASE_NAME(RobotBaseline); PHASE_NAME(IndexerLoading); PHASE_NAME(IndexerRelease);
+    PHASE_NAME(RobotConfirm); PHASE_NAME(RobotQuiet); PHASE_NAME(RobotClosing); PHASE_NAME(Paused);
+    PHASE_NAME(Correction); PHASE_NAME(ManualBaseline); PHASE_NAME(ManualWait); PHASE_NAME(AwaitCorrection);
+    PHASE_NAME(Stopped); PHASE_NAME(Fault); PHASE_NAME(Ended); PHASE_NAME(EndClosing);
+    PHASE_NAME(StartupPositioning); PHASE_NAME(HumanBaseline); PHASE_NAME(HumanConfirm); PHASE_NAME(IndexerReset);
+#undef PHASE_NAME
+  }
+  return "Unknown";
+}
 struct GameEvents {
   virtual ~GameEvents() = default;
   virtual void message(const char *text) = 0;
@@ -34,6 +49,13 @@ class Controller : public SensorObserver {
     if (outputs.faulted) { fault(); return; }
     setPhase(Phase::Paused); events.message(reason);
     events.message("Delivery paused; board/pending move frozen. Use correct or restart; no automatic feed retry.");
+  }
+  // Name the sensor column and phase so a pause identifies which IR module tripped.
+  void pauseAt(const char *reason, int column) {
+    char text[112];
+    if (column >= 0) snprintf(text,sizeof(text),"%s (IR column %d, phase %s)",reason,column+1,phaseName(phase));
+    else snprintf(text,sizeof(text),"%s (no IR column active now, phase %s)",reason,phaseName(phase));
+    pause(text);
   }
   void closeAfterHuman(uint32_t now) {
     result = board.result();
@@ -119,33 +141,33 @@ public:
   }
   void detected(uint8_t column, uint32_t startUs) override {
     if (phase == Phase::HumanReady) {
-      if (!board.legal(column)) { pause("Human disc detected in a full column"); return; }
+      if (!board.legal(column)) { pauseAt("Human disc detected in a full column",column); return; }
       humanColumn = column; seenDetection = true; received = false;
       setPhase(Phase::HumanConfirm); return;
     }
-    if (phase == Phase::HumanConfirm) { pause("Extra human disc detected"); return; }
-    if (phase == Phase::HumanBaseline) { pause("Disc detected before human ready"); return; }
+    if (phase == Phase::HumanConfirm) { pauseAt("Extra human disc detected",column); return; }
+    if (phase == Phase::HumanBaseline) { pauseAt("Disc detected before human ready",column); return; }
     if (phase == Phase::RobotBaseline || phase == Phase::ManualBaseline) {
-      pause("Disc detected before robot/manual release was armed"); return;
+      pauseAt("Disc detected before robot/manual release was armed",column); return;
     }
     const bool accepting = phase == Phase::IndexerRelease || phase == Phase::RobotConfirm || phase == Phase::ManualWait;
-    if (!accepting || int32_t(startUs-releaseUs) < 0) { pause("Premature or extra sensor detection"); return; }
-    if (column != pendingColumn) { pause("Wrong-column sensor detection"); return; }
-    if (seenDetection) { pause("Extra robot chip detected"); return; }
+    if (!accepting || int32_t(startUs-releaseUs) < 0) { pauseAt("Premature or extra sensor detection",column); return; }
+    if (column != pendingColumn) { pauseAt("Wrong-column sensor detection",column); return; }
+    if (seenDetection) { pauseAt("Extra robot chip detected",column); return; }
     seenDetection = true;
   }
   void passage(uint8_t column, uint32_t startUs) override {
     if (phase == Phase::HumanConfirm) {
-      if (column != humanColumn || !seenDetection || received) { pause("Unexpected human passage"); return; }
+      if (column != humanColumn || !seenDetection || received) { pauseAt("Unexpected human passage",column); return; }
       received = true; return;
     }
     if (phase == Phase::RobotBaseline || phase == Phase::ManualBaseline) return;
     if (!seenDetection || column != pendingColumn || int32_t(startUs-releaseUs) < 0 || received) {
-      pause("Unexpected passage"); return;
+      pauseAt("Unexpected passage",column); return;
     }
     received = true;
   }
-  void sensorProblem(const char *reason) override { pause(reason); }
+  void sensorProblem(const char *reason) override { pauseAt(reason,sensors.activeColumn()); }
   void pollSensors() { sensors.poll(events.nowUs(),*this); }
   void command(const char *line, uint32_t now) {
     if (!strcmp(line,"help")) {
@@ -219,7 +241,7 @@ public:
         if (!outputs.busy()) { sensors.reset(true); setPhase(Phase::HumanBaseline); } break;
       case Phase::HumanBaseline:
         if (sensors.stableClear(events.nowUs())) { setPhase(Phase::HumanReady); events.message("Human turn: insert ONE disc; IR registers its column."); }
-        else if (elapsed >= Config::BASELINE_TIMEOUT_MS) pause("Human sensors did not establish a clear baseline");
+        else if (elapsed >= Config::BASELINE_TIMEOUT_MS) pauseAt("Human sensors did not establish a clear baseline",sensors.activeColumn());
         break;
       case Phase::HumanConfirm:
         if (received && sensors.stableClear(events.nowUs())) {
@@ -250,11 +272,12 @@ public:
         if (!board.legal(pendingColumn)) { pause("No legal robot column"); return; }
         manual = received = seenDetection = false;
         if (!Config::HATCH_ENABLED[pendingColumn]) events.message("Selected hatch isolated: software/IR bench confirmation only.");
-        outputs.begin(uint8_t(1 << pendingColumn),events.now());
+        // Flaps sweep through the reflective sensors' view; ignore IR until they have settled.
+        sensors.reset(false); outputs.begin(uint8_t(1 << pendingColumn),events.now());
         setPhase(Phase::RobotOpening); break;
       }
       case Phase::RobotOpening:
-        if (!outputs.busy()) setPhase(Phase::RobotBaseline); break;
+        if (!outputs.busy()) { sensors.reset(true); setPhase(Phase::RobotBaseline); } break;
       case Phase::RobotBaseline: case Phase::ManualBaseline:
         if (sensors.stableClear(events.nowUs())) {
           received = seenDetection = false;
@@ -265,7 +288,7 @@ public:
             if (!outputs.command(7,Config::INDEXER.open,now)) { fault(); return; }
             setPhase(Phase::IndexerLoading); events.message("Indexer 110: loading.");
           }
-        } else if (elapsed >= Config::BASELINE_TIMEOUT_MS) pause("Sensors did not establish a clear baseline");
+        } else if (elapsed >= Config::BASELINE_TIMEOUT_MS) pauseAt("Sensors did not establish a clear baseline",sensors.activeColumn());
         break;
       case Phase::IndexerLoading:
         if (elapsed >= Config::INDEXER_SETTLE_MS+Config::INDEXER_LOAD_MS) {
@@ -282,17 +305,24 @@ public:
         else if (uint32_t(now-releaseMs) >= Config::PASSAGE_TIMEOUT_MS) pause("Robot passage timeout; no automatic retry");
         break;
       case Phase::RobotQuiet:
-        if (sensors.stableClear(events.nowUs())) { outputs.begin(0,now); setPhase(Phase::RobotClosing); }
-        else if (elapsed >= Config::BASELINE_TIMEOUT_MS) pause("Sensors did not settle after passage");
+        if (sensors.stableClear(events.nowUs())) { sensors.reset(false); outputs.begin(0,now); setPhase(Phase::RobotClosing); }
+        else if (elapsed >= Config::BASELINE_TIMEOUT_MS) pauseAt("Sensors did not settle after passage",sensors.activeColumn());
         break;
       case Phase::RobotClosing:
         if (!outputs.busy()) {
+          // Re-arm once the flaps have stopped; commitment then needs a fresh stable-clear seal.
+          if (!sensors.enabled) sensors.reset(true);
           if (pendingColumn < 0) prepareHuman(now);
-          else if (manual) { setPhase(Phase::AwaitCorrection); events.message("Compare physical board and pending move, then confirm-correction."); }
+          else if (manual) {
+            // Offer confirmation only once the re-armed sensors can seal immediately.
+            if (sensors.stableClear(events.nowUs())) {
+              setPhase(Phase::AwaitCorrection); events.message("Compare physical board and pending move, then confirm-correction.");
+            }
+          }
           else commit(now);
         }
         if (phase == Phase::RobotClosing && elapsed >= 6*Config::COMMAND_GAP_MS+Config::SETTLE_MS+Config::BASELINE_TIMEOUT_MS)
-          pause("Sensors did not settle for commitment");
+          pauseAt("Sensors did not settle for commitment",sensors.activeColumn());
         break;
       case Phase::EndClosing:
         if (!outputs.busy()) {

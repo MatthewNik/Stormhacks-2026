@@ -48,6 +48,11 @@ public:
       states[c].lowStart = states[c].changed = activity;
     }
   }
+  // First column currently active or qualified, or -1; used only for diagnostics.
+  int activeColumn() const {
+    for (int c = 0; c < 7; ++c) if (states[c].active || states[c].qualified) return c;
+    return -1;
+  }
   bool clear() const {
     for (const auto &s : states) if (s.active || s.qualified) return false;
     return true;

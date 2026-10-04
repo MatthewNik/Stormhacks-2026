@@ -247,7 +247,12 @@ static void testSensorFailures() {
     if (mode == 2) f.advance(3010);
     if (mode == 3) { f.edge(uint8_t(target),true); f.advance(1001); }
     if (mode == 4) { for (unsigned i = 0; i <= Config::EDGE_QUEUE_SIZE; ++i) f.port.edge(0,i%2==0,f.time*1000+i); f.tick(); }
-    if (mode == 5) { f.pulse(uint8_t(target)); f.until(Phase::RobotClosing); f.pulse(uint8_t(target)); }
+    if (mode == 5) {
+      // Once closing motion settles, IR is re-armed and an extra disc before commitment still pauses.
+      f.pulse(uint8_t(target)); f.until(Phase::RobotClosing);
+      for (int i = 0; i < 5000 && !f.sensors.enabled; ++i) f.tick();
+      assert(f.game.phase == Phase::RobotClosing && f.sensors.enabled); f.pulse(uint8_t(target));
+    }
     if (mode == 6) { f.pulse(uint8_t(target)); f.until(Phase::RobotQuiet); for (int i = 0; i < 50 && f.game.phase != Phase::Paused; ++i) { f.pulse(0,1); f.advance(30); } }
     assert(f.game.phase == Phase::Paused && equal(before,f.game.board) && !f.io.enabled && indexWrites(f,180) == 1);
     const auto writes = f.io.writes.size(); f.advance(4000); assert(f.io.writes.size() == writes);
@@ -260,6 +265,33 @@ static void testSensorFailures() {
   crossing.until(Phase::Paused); assert(indexWrites(crossing,180) == 0);
   Fixture baseline; baseline.start("1"); baseline.until(Phase::RobotBaseline);
   baseline.pulse(0); assert(baseline.game.phase == Phase::Paused && indexWrites(baseline,180) == 0);
+}
+static bool said(const Fixture &f, const char *text) {
+  for (const auto &m : f.events.messages) if (m.find(text) != std::string::npos) return true;
+  return false;
+}
+static void testFlapMotionIgnored() {
+  // Flaps sweep through the reflective sensors while opening; that must not count as a disc.
+  Fixture open; open.humanStart(); humanMove(open,3); open.until(Phase::RobotOpening);
+  assert(!open.sensors.enabled);
+  for (uint8_t c = 0; c < 7; ++c) open.pulse(c);
+  open.until(Phase::RobotBaseline); assert(open.sensors.enabled); open.until(Phase::IndexerRelease);
+  finishRobot(open); assert(open.game.moveCount == 2);
+  // Likewise while the target flap closes after the robot passage.
+  Fixture close; toRelease(close); const int target = close.game.pendingColumn;
+  close.pulse(uint8_t(target)); close.until(Phase::RobotClosing); assert(!close.sensors.enabled);
+  close.pulse(uint8_t((target+1)%7)); close.pulse(uint8_t(target));
+  close.until(Phase::IndexerReset);
+  assert(close.game.moveCount == 2 && close.game.history[1].column == target+1);
+  // A flap that comes to rest in a sensor's view is reported by column instead of as a disc.
+  Fixture stuck; stuck.humanStart(); humanMove(stuck,3); stuck.until(Phase::RobotOpening);
+  stuck.port.levels[5] = true; stuck.until(Phase::Paused);
+  assert(said(stuck,"Sensor stuck active (IR column 6, phase RobotBaseline)"));
+  assert(stuck.game.moveCount == 1 && indexWrites(stuck,180) == 0);
+  // Unexpected detections name the column and phase.
+  Fixture early; early.start("1"); early.until(Phase::RobotBaseline); early.pulse(2);
+  assert(early.game.phase == Phase::Paused);
+  assert(said(early,"Disc detected before robot/manual release was armed (IR column 3, phase RobotBaseline)"));
 }
 struct Observer : SensorObserver {
   unsigned detects = 0, passages = 0, errors = 0; uint32_t start = 0;
@@ -401,7 +433,7 @@ static void testCompleteGames() {
 }
 int main() {
   testAutomaticStartup(); testBoard(); testAI(); testScheduler(); testHumanSensors(); testSequencing();
-  testQualification(); testSensorFailures(); testRecoveryAndInterruptions(); testSearchCancellation(); testEndings(); testCompleteGames();
+  testQualification(); testSensorFailures(); testFlapMotionIgnored(); testRecoveryAndInterruptions(); testSearchCancellation(); testEndings(); testCompleteGames();
   puts("PASS: startup/holding, game/AI, human and robot IR, target doors, faults, recovery, atomic commitment and endings.");
   return 0;
 }

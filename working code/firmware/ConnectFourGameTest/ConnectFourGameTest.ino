@@ -99,7 +99,7 @@ void setup() {
   game.bootId = esp_random();
   Serial.setTxBufferSize(512);
   Serial.begin(Config::SERIAL_BAUD);
-  output.message("Connect Four build 019: debounced IR sampler; tolerant PCA health check; no APIs.");
+  output.message("Connect Four build 020: IR ignored during flap motion; debounced sampler; tolerant PCA check.");
   // Initialize PCA as in the motor test, before enabling the other peripherals.
   const bool motorReady = hardware.begin();
   screen.begin(); game.keepSearching = continueSearch;

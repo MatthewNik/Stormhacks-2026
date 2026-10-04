@@ -3,20 +3,6 @@
 #include <stdio.h>
 #include <stdarg.h>
 
-inline const char *phaseName(Phase p) {
-  switch (p) {
-#define PHASE_NAME(name) case Phase::name: return #name
-    PHASE_NAME(AwaitClear); PHASE_NAME(ModeSelect); PHASE_NAME(FirstPlayer); PHASE_NAME(Difficulty);
-    PHASE_NAME(HumanOpening); PHASE_NAME(HumanReady); PHASE_NAME(ClosingForRobot); PHASE_NAME(RobotSearch);
-    PHASE_NAME(RobotOpening); PHASE_NAME(RobotBaseline); PHASE_NAME(IndexerLoading); PHASE_NAME(IndexerRelease);
-    PHASE_NAME(RobotConfirm); PHASE_NAME(RobotQuiet); PHASE_NAME(RobotClosing); PHASE_NAME(Paused);
-    PHASE_NAME(Correction); PHASE_NAME(ManualBaseline); PHASE_NAME(ManualWait); PHASE_NAME(AwaitCorrection);
-    PHASE_NAME(Stopped); PHASE_NAME(Fault); PHASE_NAME(Ended); PHASE_NAME(EndClosing);
-    PHASE_NAME(StartupPositioning); PHASE_NAME(HumanBaseline); PHASE_NAME(HumanConfirm); PHASE_NAME(IndexerReset);
-#undef PHASE_NAME
-  }
-  return "Unknown";
-}
 inline const char *resultName(Game::Result r) {
   return r == Game::Result::OWins ? "O_wins" : r == Game::Result::XWins ? "X_wins" : r == Game::Result::Draw ? "draw" : "playing";
 }
