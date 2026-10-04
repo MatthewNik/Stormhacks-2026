@@ -2,6 +2,8 @@
 #include "../Controller.h"
 #include <assert.h>
 #include <stdio.h>
+#include <string.h>
+#include <string>
 static void resetBus() {
   Wire = TwoWire{}; pwmWrites.clear(); oeLevel = HIGH;
   driverBeginOK = pwmWriteOK = frequencyOK = true;
@@ -23,6 +25,7 @@ int main() {
   resetBus(); PcaHardware io;
   assert(io.begin() && oeLevel == HIGH && pwmWrites.size() == 16);
   assert(Wire.sda == 21 && Wire.scl == 22 && Wire.timeout == 50);
+  assert(Wire.frequency == 0 && Wire.repeatedReads == 3 && Wire.stoppedSelections == 0);
   assert(oscillator == 25000000 && configuredFrequency == 50);
   for (int c = 0; c < 16; ++c) assert(pwmWrites[c].channel == c && pwmWrites[c].on == 0 && pwmWrites[c].off == 4096);
   assert(io.writeAngle(0,0) && pwmWrites.back().off == 102);
@@ -37,7 +40,9 @@ int main() {
   // Gameplay owns 0-7; calibrated hatch channels now receive position pulses.
   HatchSequence hatches(io); QuietEvents events; ClearSensors port; SensorService sensors(port);
   Controller game(hatches,sensors,events);
-  game.restart(); game.command("confirm-clear",0); game.command("free",0); game.command("easy",0); game.command("1",0);
+  game.restart(); game.command("confirm-clear",0);
+  for (uint32_t t = 0; t <= 650; ++t) { events.time = t; game.tick(t); }
+  game.command("free",651); game.command("easy",0); game.command("1",0);
   for (uint32_t t = 0; t < 3000; ++t) { events.time = t; game.tick(t); }
   for (size_t i = 16; i < pwmWrites.size(); ++i) assert(pwmWrites[i].channel < 8);
   for (uint8_t channel = 2; channel <= 4; ++channel) {
@@ -57,6 +62,13 @@ int main() {
     if (failure == 4) pwmWriteOK = false;
     if (failure == 5) frequencyOK = false;
     assert(!bad.begin() && oeLevel == HIGH);
+    const char *expected[] = {"I2C initialization", "Adafruit driver initialization", "address probe",
+                             "register 0xFE read", "startup FULL_OFF", "PWM frequency"};
+    assert(strstr(bad.error(),expected[failure]));
+    assert(strstr(bad.error(),"address=0x40 SDA=21 SCL=22"));
+    const std::string firstError = bad.error();
+    pwmWriteOK = false; HatchSequence shutdown(bad); shutdown.fault();
+    assert(firstError == bad.error() && oeLevel == HIGH);
   }
   resetBus(); PcaHardware corruption; assert(corruption.begin());
   Wire.registers[0xfe] = 122; assert(!corruption.healthy());
@@ -65,5 +77,23 @@ int main() {
   resetBus(); PcaHardware writeFailure; assert(writeFailure.begin());
   HatchSequence sequence(writeFailure); sequence.begin(0x7f,0);
   pwmWriteOK = false; sequence.tick(0); assert(sequence.faulted && oeLevel == HIGH);
+  assert(strstr(writeFailure.error(),"motor position write failed"));
+  resetBus(); PcaHardware asleep; assert(asleep.begin()); Wire.registers[0] = 0x10;
+  assert(!asleep.healthy() && strstr(asleep.error(),"sleep mode"));
+  resetBus(); PcaHardware changed; assert(changed.begin()); Wire.registers[0xfe] = 122;
+  assert(!changed.healthy() && strstr(changed.error(),"PWM prescaler changed"));
+  // Reproduce the reported empty combined read while address probing still succeeds.
+  resetBus(); Wire.rejectRepeatedStart = true;
+  Wire.beginTransmission(Config::PCA_ADDRESS); Wire.write(uint8_t(0xFE));
+  assert(Wire.endTransmission(false) == 0 && Wire.requestFrom(Config::PCA_ADDRESS,size_t(1),true) == 0);
+  const auto combinedReads = Wire.repeatedReads;
+  PcaHardware compatible; assert(compatible.begin());
+  assert(Wire.frequency == 0 && Wire.stoppedSelections >= 3);
+  assert(Wire.repeatedReads == combinedReads+3 && compatible.healthy());
+  assert(compatible.writeAngle(0,115) && pwmWrites.back().off != 4096);
+  Wire.pointerAck = false;
+  assert(!compatible.healthy() && strstr(compatible.error(),"register 0xFE select failed"));
+  resetBus(); Wire.emptyRead = true; PcaHardware missingByte;
+  assert(!missingByte.begin() && strstr(missingByte.error(),"register 0xFE byte missing"));
   puts("PASS: PCA initialization, full-off channels, pulse conversion, configuration/read/write faults and OE disabling.");
 }

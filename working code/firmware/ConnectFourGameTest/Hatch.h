@@ -5,13 +5,14 @@ struct HatchIO {
   virtual bool writeAngle(uint8_t channel, uint16_t angle) = 0;
   virtual bool stopChannel(uint8_t channel) = 0;
   virtual void enable(bool enabled) = 0;
+  virtual const char *error() const { return "PCA check failed; no driver detail available."; }
 };
-// Sole owner of OE and all eight deadlines. Hatch batches never reset PCA7.
+// Sole owner of OE. Positions hold until changed or explicitly disabled.
 class HatchSequence {
   HatchIO &io;
   bool driving[8] = {};
-  uint32_t started[8] = {}, limits[8] = {};
   uint8_t mask = 0, next = 0;
+  uint8_t count = 7;
   uint32_t last = 0;
   bool active = false, first = false, settling = false;
   void updateEnable() {
@@ -20,6 +21,7 @@ class HatchSequence {
   }
 public:
   bool faulted = false;
+  const char *error() const { return io.error(); }
   explicit HatchSequence(HatchIO &hardware) : io(hardware) {}
   void disable() {
     active = false; io.enable(false);
@@ -27,34 +29,31 @@ public:
     for (uint8_t c = 0; c < 8; ++c) if (!io.stopChannel(c)) faulted = true;
   }
   void fault() { faulted = true; disable(); }
-  bool command(uint8_t channel, uint16_t angle, uint32_t now, uint32_t duration = Config::SERVO_DRIVE_MS) {
-    if (faulted || channel >= 8 || !duration) return false;
+  bool command(uint8_t channel, uint16_t angle, uint32_t) {
+    if (faulted || channel >= 8) return false;
     if (!io.writeAngle(channel,angle)) { fault(); return false; }
     driving[channel] = channel == 7 || Config::HATCH_ENABLED[channel];
-    started[channel] = now; limits[channel] = duration; updateEnable(); return true;
+    updateEnable(); return true;
   }
   void begin(uint8_t openMask, uint32_t now) {
     if (faulted) return;
-    mask = openMask & 0x7f; next = 0; last = now;
+    mask = openMask & 0x7f; next = 0; count = 7; last = now;
     active = first = true; settling = false;
   }
+  void beginStartup(uint32_t now) { begin(0x7f,now); count = 8; }
   bool busy() const { return active; }
   bool openTarget(uint8_t column, uint32_t now) {
-    return column < 7 && command(column,Config::HATCHES[column].open,now,Config::ROBOT_DRIVE_MS);
+    return column < 7 && command(column,Config::HATCHES[column].open,now);
   }
   void tick(uint32_t now) {
     if (faulted) return;
-    for (uint8_t c = 0; c < 8; ++c) if (driving[c] && uint32_t(now-started[c]) >= limits[c]) {
-      if (!io.stopChannel(c)) { fault(); return; }
-      driving[c] = false;
-    }
     updateEnable();
     if (!active) return;
     if (settling) { if (uint32_t(now-last) >= Config::SETTLE_MS) active = false; return; }
     if (!first && uint32_t(now-last) < Config::COMMAND_GAP_MS) return;
-    const auto &cal = Config::HATCHES[next];
-    if (!command(next,(mask & (1 << next)) ? cal.open : cal.closed,now)) return;
+    const auto &cal = next == 7 ? Config::INDEXER : Config::HATCHES[next];
+    if (!command(next,next == 7 || (mask & (1 << next)) ? cal.open : cal.closed,now)) return;
     first = false; last = now;
-    if (++next == 7) settling = true;
+    if (++next == count) settling = true;
   }
 };

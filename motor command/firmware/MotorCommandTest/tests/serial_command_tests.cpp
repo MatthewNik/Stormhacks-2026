@@ -76,5 +76,16 @@ int main() {
   clockMs = 1499; loop(); assert(outputEnable == HIGH);
   send("info\nstatus\n");
   assert(Serial.output.find("MOTOR_TEST v1 READY") != std::string::npos);
+  const uint16_t up[7] = {115,110,100,105,100,115,110};
+  const uint16_t down[7] = {15,8,11,12,11,12,12};
+  for (int c = 0; c < 7; ++c) {
+    send("servo "+std::to_string(c)+" up\n"); assert(commandedAngles[c] == up[c]);
+    send("servo "+std::to_string(c)+" down\n"); assert(commandedAngles[c] == down[c]);
+  }
+  send("servo 7 load\n"); assert(commandedAngles[7] == 110);
+  send("servo 7 unload\n"); assert(commandedAngles[7] == 180);
+  const auto writesBeforeBadPreset = servoDriver.writes.size();
+  send("servo 7 up\nservo 0 load\nservo 7 down\nservo 6 unload\n");
+  assert(servoDriver.writes.size() == writesBeforeBadPreset);
   std::cout << "PASS: command parsing, pulse mapping, line recovery, startup, off, fault handling, heartbeat expiry and timer wraparound\n";
 }

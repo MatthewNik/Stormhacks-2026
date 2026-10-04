@@ -15,7 +15,7 @@ int main() {
   poll(-1,40);
   click(1); assert(f.game.highlightedMode == Mode::Coach);
   click(2); assert(f.game.phase == Phase::ModeSelect);
-  click(2); assert(f.game.phase == Phase::Difficulty);
+  click(1); click(2); assert(f.game.phase == Phase::Difficulty);
   click(0); assert(f.game.difficulty == 2);
   click(1); assert(f.game.difficulty == 0);
   click(2); assert(f.game.phase == Phase::FirstPlayer);

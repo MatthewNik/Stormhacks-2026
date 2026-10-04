@@ -8,15 +8,15 @@ Columns are numbered right to left. Sensor DO and motor output must refer to the
 
 | Position from front | Column | PCA hatch | IR DO GPIO | Closed/down | Open/up |
 | --- | --- | --- | --- | --- | --- |
-| Rightmost | 1 | 0 | 34 (D34) | 50° | 140° |
-| Second from right | 2 | 1 | 35 (D35) | 60° | 145° |
-| Third from right | 3 | 2 | 36 (VP) | 55° | 140° |
-| Centre | 4 | 3 | 39 (VN) | 55° | 147° |
-| Third from left | 5 | 4 | 32 (D32) | 55° | 140° |
-| Second from left | 6 | 5 | 33 (D33) | 55° | 141° |
-| Leftmost | 7 | 6 | 27 (D27) | 70° | 140° |
+| Rightmost | 1 | 0 | 34 (D34) | 15° | 115° |
+| Second from right | 2 | 1 | 35 (D35) | 8° | 110° |
+| Third from right | 3 | 2 | 36 (VP) | 11° | 100° |
+| Centre | 4 | 3 | 39 (VN) | 12° | 105° |
+| Third from left | 5 | 4 | 32 (D32) | 11° | 100° |
+| Second from left | 6 | 5 | 33 (D33) | 12° | 115° |
+| Leftmost | 7 | 6 | 27 (D27) | 12° | 110° |
 
-PCA7 is the single magazine indexer: load 80°, unload/release 145°. PCA8–15 remain disabled. All seven hatch outputs are enabled. Servo PWM mapping is 50 Hz, 500–2500 us. Flap command starts are staggered by at least 50 ms; motor 7 retains its separate delivery sequence.
+PCA7 is the single magazine indexer: load 110°, unload/release 180°. PCA8–15 remain disabled. All seven hatch outputs are enabled. Servo PWM mapping is 50 Hz, 500–2500 us. Flap command starts are staggered by at least 50 ms; motor 7 retains its separate delivery sequence. Startup commands all doors open then PCA7 loaded with at least 50 ms spacing. Position signals remain active until stop/restart/fault disables outputs.
 
 ## PCA9685 and motor power
 
@@ -35,7 +35,7 @@ Expected I2C address is 0x40. Connect each servo orange/yellow wire to its chann
 
 All seven sensor VCC pins connect to 3.3 V, GND to common ground, AO remains unused, and DO follows the column table. Inputs are configured active LOW. Verify clear = HIGH and disc detected = LOW on every module. GPIO34–39 have no internal pull-ups; verify module pull-ups to 3.3 V or provide suitable external ones. Never connect a 5 V DO signal directly to ESP32.
 
-Robot delivery requires exactly one qualified passage at the target column; wrong/extra/missing/stuck events pause delivery. Human-turn IR capture remains disabled as specified by handoff 004; enter the human column through the Pi terminal after placement. Clear sensor values alone do not prove connectivity or final seating.
+Robot delivery requires exactly one qualified passage at the target column; wrong/extra/missing/stuck events pause delivery. Human turns open all doors, hold motor 7 loaded, and arm IR after a stable-clear baseline. One legal-column passage is registered automatically; typed human columns are rejected. Clear sensor values alone do not prove connectivity or final seating.
 
 ## OLED and three buttons
 
@@ -54,4 +54,4 @@ Left GPIO13, Right GPIO14, Centre GPIO23: each switch connects its GPIO to GND w
 
 ## First full-hardware check
 
-Connect logic with servo power off, flash the full version, and reset ESP32 if PCA was absent at boot. Run the Pi service. Clear board/indexer/feed path, enter `confirm-clear` inside its terminal, then verify the normal menu and buttons. Keep discs out for initial servo and IR qualification. Calibrated command angles and passing software tests do not establish loaded retention, reliable magazine isolation or real sensor timing.
+Connect logic with servo power off, flash the full version, and reset ESP32 if PCA was absent at boot. Run the Pi service. Healthy boot first positions all doors open and PCA7 loaded, then opens Mode automatically. Enabling servo power applies those held positions. Clear board/indexer/feed path before confirming a game start, then verify the normal menu and buttons. Keep discs out for initial servo and IR qualification. Calibrated command angles and passing software tests do not establish loaded retention, reliable magazine isolation or real sensor timing.

@@ -8,7 +8,8 @@ enum class Mode { FreePlay, Coach };
 enum class Phase { AwaitClear, ModeSelect, FirstPlayer, Difficulty, HumanOpening, HumanReady, ClosingForRobot,
   RobotSearch, RobotOpening, RobotBaseline, IndexerLoading, IndexerRelease,
   RobotConfirm, RobotQuiet, RobotClosing, EndClosing, Ended, Stopped, Fault,
-  Paused, Correction, ManualBaseline, ManualWait, AwaitCorrection };
+  Paused, Correction, ManualBaseline, ManualWait, AwaitCorrection,
+  StartupPositioning, HumanBaseline, HumanConfirm, IndexerReset };
 struct GameEvents {
   virtual ~GameEvents() = default;
   virtual void message(const char *text) = 0;
@@ -23,8 +24,10 @@ class Controller : public SensorObserver {
   GameEvents &events;
   uint32_t phaseStarted = 0, releaseMs = 0, releaseUs = 0, generation = 0;
   bool manual = false, received = false, seenDetection = false;
+  int humanColumn = -1;
   void prepareHuman(uint32_t now) {
-    sensors.reset(false); outputs.begin(board.playableMask(),now); setPhase(Phase::HumanOpening);
+    humanColumn = -1; received = seenDetection = false;
+    sensors.reset(false); outputs.begin(0x7f,now); setPhase(Phase::HumanOpening);
   }
   void pause(const char *reason) {
     ++generation; outputs.disable(); sensors.reset(false);
@@ -33,8 +36,16 @@ class Controller : public SensorObserver {
     events.message("Delivery paused; board/pending move frozen. Use correct or restart; no automatic feed retry.");
   }
   void closeAfterHuman(uint32_t now) {
-    result = board.result(); outputs.begin(0,now);
-    setPhase(result == Game::Result::Playing ? Phase::ClosingForRobot : Phase::EndClosing);
+    result = board.result();
+    if (result == Game::Result::Playing) {
+      sensors.reset(true);
+      if (!sensors.clear()) { pause("Sensor active at the human-to-robot boundary"); return; }
+      setPhase(Phase::RobotSearch);
+    } else {
+      outputs.begin(0,now);
+      if (!outputs.command(7,Config::INDEXER.open,now)) { fault(); return; }
+      setPhase(Phase::EndClosing);
+    }
   }
   void commit(uint32_t now) {
     if (pendingColumn < 0 || !received || !sensors.seal(events.nowUs(),*this)) return;
@@ -44,10 +55,8 @@ class Controller : public SensorObserver {
     recordMove(committedColumn,robot);
     pendingColumn = -1; received = seenDetection = false;
     result = board.result(); events.boardChanged(board);
-    if (result != Game::Result::Playing) {
-      setPhase(Phase::Ended);
-      events.message(result == Game::Result::Draw ? "Draw. Use restart." : result == Game::Result::OWins ? "O wins. Use restart." : "X wins. Use restart.");
-    } else prepareHuman(now);
+    if (!outputs.command(7,Config::INDEXER.open,now)) { fault(); return; }
+    setPhase(Phase::IndexerReset);
   }
 public:
   struct Move { uint8_t column; char symbol; };
@@ -76,14 +85,14 @@ public:
       return;
     }
     human = robotFirst ? 'X' : 'O'; robot = Game::other(human);
-    outputs.begin(0,now);
-    setPhase(robotFirst ? Phase::ClosingForRobot : Phase::RobotClosing);
+    if (robotFirst) { sensors.reset(true); setPhase(Phase::RobotSearch); }
+    else prepareHuman(now);
   }
-  void chooseMode(Mode selected, uint32_t now) {
+  void chooseMode(Mode selected, uint32_t) {
     if (phase != Phase::ModeSelect) return;
-    mode = highlightedMode = selected; difficulty = selected == Mode::Coach ? 1 : 0; robotFirst = false;
-    if (selected == Mode::Coach) beginPlay(now);
-    else setPhase(Phase::Difficulty);
+    if (selected == Mode::Coach) { events.message("Coach unavailable; select Free Play."); return; }
+    mode = highlightedMode = selected; difficulty = 0; robotFirst = false;
+    setPhase(Phase::Difficulty);
   }
   Controller(HatchSequence &scheduler, SensorService &service, GameEvents &output)
     : outputs(scheduler), sensors(service), events(output) {}
@@ -92,6 +101,7 @@ public:
     if (phase == Phase::Fault) return;
     ++generation; outputs.fault(); sensors.reset(false); setPhase(Phase::Fault);
     events.message("ERROR: PCA fault. Outputs disabled; repair and reset ESP32.");
+    events.message(outputs.error());
   }
   void restart() {
     if (phase == Phase::Fault || outputs.faulted) { fault(); return; }
@@ -100,8 +110,24 @@ public:
     setPhase(Phase::AwaitClear);
     events.message("Clear board, indexer and feed path. Then type confirm-clear. Stored board retained until confirmation.");
   }
+  void startup(uint32_t now) {
+    if (phase == Phase::Fault || outputs.faulted) { fault(); return; }
+    ++generation; outputs.disable(); sensors.reset(false);
+    if (outputs.faulted) { fault(); return; }
+    setPhase(Phase::AwaitClear);
+    command("confirm-clear",now);
+  }
   void detected(uint8_t column, uint32_t startUs) override {
-    if (phase == Phase::RobotBaseline || phase == Phase::ManualBaseline) return;
+    if (phase == Phase::HumanReady) {
+      if (!board.legal(column)) { pause("Human disc detected in a full column"); return; }
+      humanColumn = column; seenDetection = true; received = false;
+      setPhase(Phase::HumanConfirm); return;
+    }
+    if (phase == Phase::HumanConfirm) { pause("Extra human disc detected"); return; }
+    if (phase == Phase::HumanBaseline) { pause("Disc detected before human ready"); return; }
+    if (phase == Phase::RobotBaseline || phase == Phase::ManualBaseline) {
+      pause("Disc detected before robot/manual release was armed"); return;
+    }
     const bool accepting = phase == Phase::IndexerRelease || phase == Phase::RobotConfirm || phase == Phase::ManualWait;
     if (!accepting || int32_t(startUs-releaseUs) < 0) { pause("Premature or extra sensor detection"); return; }
     if (column != pendingColumn) { pause("Wrong-column sensor detection"); return; }
@@ -109,6 +135,10 @@ public:
     seenDetection = true;
   }
   void passage(uint8_t column, uint32_t startUs) override {
+    if (phase == Phase::HumanConfirm) {
+      if (column != humanColumn || !seenDetection || received) { pause("Unexpected human passage"); return; }
+      received = true; return;
+    }
     if (phase == Phase::RobotBaseline || phase == Phase::ManualBaseline) return;
     if (!seenDetection || column != pendingColumn || int32_t(startUs-releaseUs) < 0 || received) {
       pause("Unexpected passage"); return;
@@ -119,8 +149,8 @@ public:
   void pollSensors() { sensors.poll(events.nowUs(),*this); }
   void command(const char *line, uint32_t now) {
     if (!strcmp(line,"help")) {
-      events.message("confirm-clear; free/coach; easy/medium/hard; 0 human or 1 robot; columns 1-7.");
-      events.message("help, board, stop, restart; recovery: correct, arm-manual, confirm-correction. Robot moves require IR."); return;
+      events.message("confirm-clear; free; coach unavailable; easy/medium/hard; 0 human or 1 robot. Human moves: IR only.");
+      events.message("help, board, diagnose, stop, restart; recovery: correct, arm-manual, confirm-correction. Robot moves require IR."); return;
     }
     if (!strcmp(line,"board")) { events.boardChanged(board); return; }
     if (!strcmp(line,"restart")) { restart(); return; }
@@ -135,9 +165,12 @@ public:
     if (!strcmp(line,"confirm-clear") && phase == Phase::AwaitClear) {
       board.clear(); result = Game::Result::Playing; pendingColumn = -1; difficulty = -1;
       moveCount = 0; ++gameId; mode = highlightedMode = Mode::FreePlay; robotFirst = false;
-      received = seenDetection = manual = false; human = 'O'; robot = 'X';
-      sensors.reset(false); setPhase(Phase::ModeSelect); events.boardChanged(board);
-      events.message("Mode: Left/Right browse; Centre confirms. Terminal: free or coach."); return;
+      received = seenDetection = manual = false; humanColumn = -1; human = 'O'; robot = 'X';
+      sensors.reset(false);
+      if (Config::MENU_ONLY) setPhase(Phase::ModeSelect);
+      else { outputs.beginStartup(now); setPhase(Phase::StartupPositioning); }
+      events.boardChanged(board);
+      events.message("Mode follows positioning: select Free Play. Coach unavailable."); return;
     }
     if (!strcmp(line,"correct") && (phase == Phase::Paused || phase == Phase::Stopped) && pendingColumn >= 0) {
       outputs.disable(); sensors.reset(false);
@@ -156,7 +189,7 @@ public:
     if (phase == Phase::ModeSelect) {
       if (!strcmp(line,"free")) chooseMode(Mode::FreePlay,now);
       else if (!strcmp(line,"coach")) chooseMode(Mode::Coach,now);
-      else events.message("ERROR: select free or coach.");
+      else events.message("ERROR: select free; Coach unavailable.");
       return;
     }
     if (phase == Phase::FirstPlayer) {
@@ -171,10 +204,7 @@ public:
       events.message(line); setPhase(Phase::FirstPlayer); return;
     }
     if (phase != Phase::HumanReady) { events.message("ERROR: command unavailable; use help."); return; }
-    if (strlen(line) != 1 || *line < '1' || *line > '7') { events.message("ERROR: enter one column digit 1-7."); return; }
-    if (!board.drop(*line-'1',human)) { events.message("ERROR: column full."); return; }
-    recordMove(*line-'1',human);
-    events.boardChanged(board); closeAfterHuman(now);
+    events.message("Human moves are sensor-only. Insert one disc when the display says ready.");
   }
   void tick(uint32_t now) {
     outputs.tick(now);
@@ -182,8 +212,23 @@ public:
     pollSensors();
     const uint32_t elapsed = uint32_t(now-phaseStarted);
     switch (phase) {
+      case Phase::StartupPositioning:
+        if (!outputs.busy()) setPhase(Phase::ModeSelect);
+        break;
       case Phase::HumanOpening:
-        if (!outputs.busy()) { setPhase(Phase::HumanReady); events.message("Human turn: type column 1-7. IR input ignored."); } break;
+        if (!outputs.busy()) { sensors.reset(true); setPhase(Phase::HumanBaseline); } break;
+      case Phase::HumanBaseline:
+        if (sensors.stableClear(events.nowUs())) { setPhase(Phase::HumanReady); events.message("Human turn: insert ONE disc; IR registers its column."); }
+        else if (elapsed >= Config::BASELINE_TIMEOUT_MS) pause("Human sensors did not establish a clear baseline");
+        break;
+      case Phase::HumanConfirm:
+        if (received && sensors.stableClear(events.nowUs())) {
+          if (!sensors.seal(events.nowUs(),*this) || phase != Phase::HumanConfirm) break;
+          if (!board.drop(humanColumn,human)) { pause("Human column no longer legal"); break; }
+          recordMove(humanColumn,human); humanColumn = -1;
+          events.boardChanged(board); closeAfterHuman(now);
+        } else if (elapsed >= Config::PASSAGE_TIMEOUT_MS) pause("Human passage did not settle");
+        break;
       case Phase::ClosingForRobot:
         if (!outputs.busy()) { sensors.reset(true); setPhase(Phase::RobotSearch); } break;
       case Phase::RobotSearch: {
@@ -205,11 +250,11 @@ public:
         if (!board.legal(pendingColumn)) { pause("No legal robot column"); return; }
         manual = received = seenDetection = false;
         if (!Config::HATCH_ENABLED[pendingColumn]) events.message("Selected hatch isolated: software/IR bench confirmation only.");
-        if (!outputs.openTarget(uint8_t(pendingColumn),events.now())) { fault(); return; }
+        outputs.begin(uint8_t(1 << pendingColumn),events.now());
         setPhase(Phase::RobotOpening); break;
       }
       case Phase::RobotOpening:
-        if (elapsed >= Config::SETTLE_MS) setPhase(Phase::RobotBaseline); break;
+        if (!outputs.busy()) setPhase(Phase::RobotBaseline); break;
       case Phase::RobotBaseline: case Phase::ManualBaseline:
         if (sensors.stableClear(events.nowUs())) {
           received = seenDetection = false;
@@ -218,7 +263,7 @@ public:
             events.message("Manually deliver ONE robot chip through the pending target sensor now.");
           } else {
             if (!outputs.command(7,Config::INDEXER.open,now)) { fault(); return; }
-            setPhase(Phase::IndexerLoading); events.message("Indexer 80: loading.");
+            setPhase(Phase::IndexerLoading); events.message("Indexer 110: loading.");
           }
         } else if (elapsed >= Config::BASELINE_TIMEOUT_MS) pause("Sensors did not establish a clear baseline");
         break;
@@ -228,7 +273,7 @@ public:
           // The post-write timestamp is conservative: pre-command activity cannot count.
           if (!outputs.command(7,Config::INDEXER.closed,now)) { fault(); return; }
           releaseMs = events.now(); releaseUs = events.nowUs(); setPhase(Phase::IndexerRelease);
-          events.message("Indexer 145: release; waiting for target IR passage.");
+          events.message("Indexer 180: release; waiting for target IR passage.");
         } break;
       case Phase::IndexerRelease:
         if (elapsed >= Config::INDEXER_SETTLE_MS) setPhase(Phase::RobotConfirm); break;
@@ -254,6 +299,15 @@ public:
           setPhase(Phase::Ended);
           events.message(result == Game::Result::Draw ? "Draw. Use restart." : result == Game::Result::OWins ? "O wins. Use restart." : "X wins. Use restart.");
         } break;
+      case Phase::IndexerReset:
+        if (elapsed >= Config::INDEXER_SETTLE_MS+Config::INDEXER_LOAD_MS) {
+          if (result == Game::Result::Playing) prepareHuman(now);
+          else {
+            setPhase(Phase::Ended);
+            events.message(result == Game::Result::Draw ? "Draw. Use restart." : result == Game::Result::OWins ? "O wins. Use restart." : "X wins. Use restart.");
+          }
+        }
+        break;
       default: break;
     }
   }

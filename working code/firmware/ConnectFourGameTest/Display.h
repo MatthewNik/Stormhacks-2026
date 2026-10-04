@@ -33,7 +33,10 @@ public:
     }
     if (game.phase == Phase::ModeSelect) {
       if (game.highlightedMode == Mode::FreePlay) menu(Config::MENU_ONLY ? "TEST: Mode" : "Mode","FREE","PLAY");
-      else menu(Config::MENU_ONLY ? "TEST: Mode" : "Mode","COACH");
+      else {
+        text(0,0,"Mode",CYAN); oled.setTextSize(2); text(0,14,"COACH",YELLOW);
+        oled.setTextSize(1); text(0,36,"Unavailable"); text(0,56,"< Left/Right >");
+      }
       return;
     }
     if (game.phase == Phase::FirstPlayer) {
@@ -42,32 +45,25 @@ public:
     if (game.phase == Phase::Difficulty) {
       menu("Difficulty",game.difficulty == 0 ? "EASY" : game.difficulty == 1 ? "MEDIUM" : "HARD"); return;
     }
-    char heading[] = "H:O R:X easy"; heading[2] = game.human; heading[6] = game.robot;
-    text(0,0,heading,CYAN);
-    // Difficulty occupies the right side of the assignment line.
-    oled.fillRect(48,0,48,8,0);
-    text(48,0,game.difficulty == 0 ? "easy" : game.difficulty == 1 ? "medium" : game.difficulty == 2 ? "hard" : "--",CYAN);
-    for (int c = 0; c < 7; ++c) {
-      oled.setCursor(8+c*12,8); oled.setTextColor(YELLOW); oled.print(c+1);
-      for (int r = 0; r < 6; ++r) {
-        const int x = 8+c*12, y = 16+r*6;
-        const char symbol = game.board.cells[r][c];
-        if (symbol == 'O') oled.drawCircle(x+2,y+2,2,YELLOW);
-        else if (symbol == 'X') {
-          oled.drawLine(x,y,x+4,y+4,CYAN); oled.drawLine(x+4,y,x,y+4,CYAN);
-        } else oled.drawPixel(x+2,y+2,0x4208);
-      }
+    if (game.phase == Phase::StartupPositioning) {
+      text(0,0,"Positioning",CYAN); text(0,16,"Doors: up/open");
+      text(0,30,"Motor 7: load"); text(0,48,"Please wait"); return;
     }
+    text(0,0,game.phase == Phase::Fault ? "PCA Fault" : "Free Play",CYAN);
+    text(0,12,game.difficulty == 0 ? "Easy" : game.difficulty == 1 ? "Medium" : game.difficulty == 2 ? "Hard" : "",WHITE);
     const char *status = "Hatches moving";
     switch (game.phase) {
-      case Phase::HumanReady: status = "Human: enter 1-7"; break;
+      case Phase::HumanReady: status = "Insert ONE disc"; break;
+      case Phase::HumanBaseline: status = "IR: clear check"; break;
+      case Phase::HumanConfirm: status = "Human: verify IR"; break;
+      case Phase::IndexerReset: status = "Indexer: reload"; break;
       case Phase::HumanOpening: status = "Human: opening"; break;
       case Phase::ClosingForRobot: status = "Robot: closing"; break;
       case Phase::RobotSearch: status = "Robot: thinking"; break;
       case Phase::RobotOpening: status = "Robot: opening"; break;
       case Phase::RobotBaseline: status = "IR: clear check"; break;
-      case Phase::IndexerLoading: status = "Indexer: load 80"; break;
-      case Phase::IndexerRelease: status = "Indexer: drop 145"; break;
+      case Phase::IndexerLoading: status = "Indexer: load 110"; break;
+      case Phase::IndexerRelease: status = "Indexer: drop 180"; break;
       case Phase::RobotConfirm: status = "Waiting for IR"; break;
       case Phase::RobotQuiet: status = "IR: quiet check"; break;
       case Phase::RobotClosing: status = "Robot: closing"; break;
@@ -82,12 +78,12 @@ public:
         status = game.result == Game::Result::Draw ? "Draw" : game.result == Game::Result::OWins ? "O wins" : "X wins"; break;
       default: break;
     }
-    text(0,56,status,WHITE);
-    if (game.pendingColumn >= 0) {
-      // Pending target stays distinct from the committed board.
-      oled.setTextColor(YELLOW);
-      if (!Config::HATCH_ENABLED[game.pendingColumn]) { oled.setCursor(78,0); oled.print('!'); }
-      oled.setCursor(84,0); oled.print(game.pendingColumn+1);
+    text(0,28,status,YELLOW);
+    if (game.phase == Phase::Fault) text(0,46,"Type diagnose");
+    else if (game.phase == Phase::HumanReady) text(0,46,"IR input active");
+    else if (game.pendingColumn >= 0) {
+      char target[] = "Robot column: 1"; target[14] = char('1'+game.pendingColumn);
+      text(0,46,target);
     }
   }
 };

@@ -7,7 +7,7 @@ import threading
 import time
 
 DEFAULT_PORT = "/dev/serial/by-id/usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_Controller_0001-if00-port0"
-HELP = "Commands: servo <0-7> <0-180>, off <0-7>, off all, status, help, quit"
+HELP = "Commands: servo <0-7> <0-180>, servo <0-6> up/down, servo 7 load/unload, off <0-7>, off all, status, help, quit"
 
 
 def validate_command(text):
@@ -21,6 +21,11 @@ def validate_command(text):
             and re.fullmatch(r"[0-9]{1,3}", parts[2])
             and 0 <= int(parts[2]) <= 180):
         return f"servo {int(parts[1])} {int(parts[2])}"
+    if len(parts) == 3 and parts[0] == "servo":
+        if re.fullmatch(r"[0-6]", parts[1]) and parts[2] in ("up", "down"):
+            return " ".join(parts)
+        if parts[1] == "7" and parts[2] in ("load", "unload"):
+            return " ".join(parts)
     raise ValueError(HELP)
 
 

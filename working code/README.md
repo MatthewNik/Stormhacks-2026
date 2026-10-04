@@ -1,110 +1,44 @@
-# working code
+# Connect Four: full game with automatic IR moves
 
+ESP32 owns the board, minimax engine, three buttons, SSD1331 OLED, seven IR sensors, PCA9685 motors, faults and move commitment. The optional Raspberry Pi provides a USB terminal and deduplicated game logs. Normal startup runs no coaching, Gemini, ElevenLabs or speech service, even if the Pi's existing configuration contains API keys.
 
-## Build this saved version
+## Play
 
-Run `compile-firmware.ps1` without switches to build this directory's default version. Run `build-native.cmd` for five native suites, and `python -m unittest discover -s tests -v` from `pi` for the Pi tests. After a successful build, run `package-deployment.ps1`. The `deployment` directory contains `firmware.bin`, `pi-update.zip`, and `SHA256SUMS`. The Pi package contains only Python source and requirements; it preserves the remote `.env`, virtual environment, logs, and audio settings. See [DEPLOY.md](DEPLOY.md) for exact commands.
+1. Clear the physical board and feed path before powering the machine or starting a new game. Healthy startup moves all seven doors up/open and motor 7 to load 110, then opens Mode. Position signals remain active; there is no initial typed clearing command.
+2. Left/Right browse Mode; Centre confirms Free Play. Coach is visible with **Unavailable** and cannot be selected.
+3. Select Easy, Medium or Hard, then Human or Robot first. Defaults: Easy and Human first. O always starts. Search depths are 2/4/5 plies.
+4. Wait for **Insert ONE disc**. All doors are open and motor 7 is loaded. Insert one human disc; its IR sensor registers the column automatically. Do not type a column or insert another disc before the next human prompt.
+5. The engine selects the robot column. All other doors close, the target stays open, and motor 7 releases at 180 only after settling and a clear IR baseline. One target passage, stable clear and completed door closure are required before commitment. Motor 7 returns to load 110 before the next human turn.
+6. At a win/draw all doors close and motor 7 stays loaded. Use `restart`, physically clear the board/indexer/feed path, then `confirm-clear` to reset and position the machine again.
 
-Full hardware defaults: PCA9685 must be connected; clearing confirmation is required before menus.
+Buttons connect GPIO13/14/23 (Left/Right/Centre) to GND. They debounce for 30 ms, do not repeat while held and require release between screens. Simultaneous presses do not confirm. Centre operates setup menus; clearing and recovery use the terminal.
 
-# Connect Four: ESP32 controller and Raspberry Pi coaching
+OLED shows the Mode → Difficulty → Who starts? menus, then plain turn/status text. It does not draw the game board. The Pi terminal still displays the board.
 
-The firmware in `firmware/ConnectFourGameTest` is the integration version. The original `Arduino/ConnectFourGameTest` remains unchanged. ESP32 owns gameplay, minimax, buttons, OLED, sensing, motor sequencing, faults and move commitment. The Pi is an optional USB sidecar for the operator terminal, game logs, Gemini explanations and ElevenLabs speech.
+Terminal setup remains available: `free`, then `easy`/`medium`/`hard`, then `0` for human first or `1` for robot first. Typed human columns are rejected. `coach` reports unavailable. `board`, `snapshot`, `help`, `stop` and recovery commands remain available.
 
-## Start a game
+## Stop and recovery
 
-1. Clear the board, indexer and feed path; enter `confirm-clear` in the Pi terminal.
-2. On the OLED, use Left/Right to highlight Free Play or Coach, then press Centre to confirm.
-3. Free Play: use Left/Right to browse Easy, Medium and Hard, then Centre to confirm. Next browse Human or Robot first, then Centre to start. Defaults are Free Play, Easy and Human first.
-4. Coach starts with the human first and medium robot AI. The first robot response prefers the centre unless an immediate win/block takes priority. Later responses adapt to the board.
-5. At `HumanReady`, place a human disc and type its column `1–7` through the Pi terminal. Robot moves still require exactly one qualified target IR passage followed by quiet time and hatch closure before commitment.
+`stop` immediately disables motor signals and IR capture, retaining board/history and any pending robot target. `quit` exits the Pi terminal without stopping ESP32; use `stop` first when movement must stop.
 
-Left connects GPIO13 to GND, Right connects GPIO14 to GND, and Centre connects GPIO23 to GND. All three use internal pull-ups. Confirm the actual wiring before powering the prototype. Inputs debounce for 30 ms and act once per stable press; holding does not repeat. Left/Right wrap around at either end of a menu. Release all three buttons between screens; simultaneous presses do not select anything. Centre confirms setup menus only; clearing and recovery retain their terminal commands.
+For a PCA fault, type `diagnose` in the Pi terminal. Firmware reports the first failed step, address, SDA/SCL pins, error code and observed register/channel value. The same detail is repeated with Fault snapshots, including after USB reconnect. Diagnosis reads the cached error only; it does not move motors, clear the fault or retry delivery. The Pi startup command opens USB and can encounter an existing fault or a reset-time fault; its timing alone does not identify the cause.
 
-Coach gives short hints and move feedback, combining feedback with the next hint when gameplay advances quickly. Both modes receive an end-of-game review. Speech never blocks gameplay; outdated API results/audio are discarded. No microphone or voice commands are included.
+Repeated identical PCA detail messages are displayed once per connection; `diagnose` explicitly shows the report again. ESP32 PCA initialization and primary register reads now follow the working motor-command program: default Wire clock, Adafruit setup, and repeated-start one-byte reads. A failed read gets one checked STOP-separated fallback; empty reads still latch a fault. Firmware announces build 017; the Pi reports a missing snapshot after six seconds.
 
-Terminal-only setup also works:
+Wrong/extra/premature robot passages, ambiguous human passages, full-column human input, stuck/noisy sensors and queue overflow pause with outputs disabled. There is no automatic disc retry. For a pending robot move, secure the mechanism and use `correct`, `arm-manual`, deliver exactly one target disc when prompted, then `confirm-correction` after checking physical agreement. No indexer release is issued during correction; after commitment normal load positioning resumes. Human ambiguity or uncertain feed state requires restart and physical clearing. PCA faults require repair and ESP32 reset.
 
-```text
-confirm-clear
-free
-medium
-0
-```
+## Install and verify
 
-`0` means human first; `1` means robot first. Alternatively enter `coach` after `confirm-clear`. Use `stop`, `restart`, `correct`, `arm-manual`, and `confirm-correction` as documented in the firmware README. No automatic recovery or feed retry is added.
+[DEPLOY.md](DEPLOY.md) contains exact Windows transfer and Pi installation/flashing commands. [WIRING.md](WIRING.md) contains the complete pin and angle table. [Firmware guide](firmware/ConnectFourGameTest/README.md) explains timing and physical checks. [PROTOCOL.md](PROTOCOL.md) defines serial frames.
 
-## API keys
+From this directory run `cmd /c build-native.cmd` for five firmware suites. From `pi`, run `python -m unittest discover -s tests -v`. Run `compile-firmware.ps1`, then `package-deployment.ps1` after checks pass. The full hardware build uses MENU_TEST_ONLY=0. Outputs remain in this directory's `build` and `deployment` folders; the Pi ZIP excludes credentials, environments and logs.
 
-Fill in the blank `pi/.env`, which is excluded from Git:
+Start the installed terminal with `.venv/bin/python -m connect4`. `--local-only` and `--no-speech` remain compatible no-op flags. No audio setup or API keys are needed. The terminal is a foreground program, not an automatic system service.
 
-```dotenv
-GEMINI_API_KEY=your_key
-ELEVENLABS_API_KEY=your_key
-```
+## Logs and reconnect
 
-`pi/.env.example` lists every supported setting. Model, voice ID, serial port, speech enablement and ALSA audio device are configurable. Gemini defaults to `gemini-3.5-flash-lite`; ElevenLabs defaults to its quickstart voice and `eleven_flash_v2_5`. Use a voice/model available to your account. Do not put credentials in shell commands or commit them.
+Snapshots and committed moves are validated and logged in `pi/logs/game-<boot_id>-<game_id>.jsonl`. Pending targets are not committed moves. ESP32 stores up to 42 moves in RAM. USB reconnect reconstructs missed committed history without resending moves. Some serial adapters reset ESP32 on open; a reset starts a new empty logical game and automatically positions motors. Clear the physical board/feed path before starting again.
 
-The Pi computes legal columns, immediate wins, threats, forks and five-ply move scores, then supplies that evidence to Gemini through its structured-output REST API. This finite search does not prove perfect play. If Gemini is unavailable, the terminal uses a local explanation. ElevenLabs creates 24 kHz mono PCM; the sidecar wraps it as WAV for `aplay`. Provider calls have a 10-second deadline; only completed-game reviews retry once. The audio cache holds at most 128 files.
+`.venv/bin/python -m connect4 --replay logs/game-42-1.jsonl` prints saved final state without serial, coaching or network calls. No hints, feedback or game review are generated in this version.
 
-## Pi setup, when ready
-
-These are operator steps; no SSH connection, remote install, firmware upload or Bluetooth pairing has been performed.
-
-1. Enable SSH on the Pi using Raspberry Pi Imager customization or `raspi-config`. Connect from Windows using `ssh <username>@<hostname-or-ip>`; the username is the one you configured, not necessarily `pi`.
-2. Copy this implementation's `pi` directory to your chosen Pi project directory. The commands below run from that directory. Keep `.env` private (`chmod 600 .env`).
-3. Install the runtime and create its virtual environment:
-
-```bash
-sudo apt update
-sudo apt install python3-venv python3-pip alsa-utils
-python3 -m venv .venv
-.venv/bin/python -m pip install -r requirements.txt
-```
-
-4. Plug ESP32 into Pi USB. Use `ls -l /dev/serial/by-id/` to find a stable device path and put it in `SERIAL_PORT`. Give your user serial access with `sudo usermod -aG dialout "$USER"`, then log out and back in. Close Arduino Serial Monitor and other serial owners.
-5. Initially run without APIs/audio:
-
-```bash
-.venv/bin/python -m connect4 --local-only
-```
-
-6. Configure Bluetooth audio separately. Raspberry Pi OS Lite needs an audio server for Bluetooth; use PipeWire with its ALSA bridge:
-
-```bash
-sudo apt install pipewire pipewire-pulse pipewire-audio pulseaudio-utils pipewire-alsa bluez
-sudo reboot
-```
-
-After reconnecting over SSH, put the speaker in pairing mode and run `bluetoothctl`. Use `power on`, `agent on`, `default-agent`, `scan on`, then `pair <speaker-MAC>`, `trust <speaker-MAC>`, `connect <speaker-MAC>`, `scan off`, and `quit`. List sinks with `pactl list short sinks`, select the speaker with `pactl set-default-sink <sink-name>`, and unmute it with `pactl set-sink-mute <sink-name> 0`. Keep `AUDIO_DEVICE=default` for the PipeWire ALSA bridge. Verify ordinary WAV playback with `aplay` before enabling API speech. If no sink appears, verify the PipeWire/WirePlumber user services and Bluetooth connection rather than changing the firmware.
-
-7. Run `.venv/bin/python -m connect4 --no-speech` to check Gemini text, then `.venv/bin/python -m connect4` for speech. If SSH drops, ESP32 keeps its current board and sequencing. Reconnect and start the terminal again; do not repeat a physical move merely because its acknowledgement was lost.
-
-The terminal is an interactive foreground program, not an unattended system service. Use `quit` to leave; it does not issue `stop` to ESP32. If you need motion stopped, enter `stop` first. Some USB adapters may reset ESP32 when opened despite DTR/RTS being disabled; verify your board. After an ESP32 reset, clear and confirm the physical board before starting again.
-
-## Logs and recovery
-
-Validated states and deduplicated committed moves are saved in `pi/logs/game-<boot_id>-<game_id>.jsonl`, along with explanations and session status. Pending robot choices are state information, not committed moves. ESP32 retains the current game's 42-move history in RAM and includes it in snapshots every two seconds or on request. A Pi reconnect can reconstruct missed moves; an ESP32 reboot cannot reconstruct a lost board. Games completely missed while the Pi is absent cannot be recovered after ESP32 starts a different game.
-
-The terminal rejects unsynchronized human moves and allows one outstanding move request. If a response is lost, enter `snapshot`: the terminal also queries that request's acceptance status. It never automatically resends a move. Conflicting history or a damaged log disables human input through the Pi until valid state/log storage is restored; preserve the log for inspection.
-
-Replay a saved log without serial access, keys, audio or network requests:
-
-```bash
-.venv/bin/python -m connect4 --replay logs/game-42-1.jsonl
-```
-
-## Verification
-
-On Windows, from this directory, `cmd /c build-native.cmd` initializes the installed Visual Studio Build Tools environment and runs four native firmware suites. Alternatively run `firmware/ConnectFourGameTest/tests/run-native.ps1` from a developer PowerShell. All outputs stay in `build`.
-
-From `pi`, run `python -m unittest discover -s tests -v`. These tests mock serial and providers, exercise stale speech and history recovery, and validate frames generated by the native C++ serializer when its executable is available. No API credits or hardware are used. On Linux, the Windows executable test is skipped.
-
-Compile the copied sketch using `compile-firmware.ps1`, or Arduino IDE Verify with ESP32 Dev Module. No upload is automatic. Hardware checks still require servo power off/unloaded operation first: verify larger OLED layouts, all three buttons, all seven IR sensors, disconnect/reconnect behavior, and loss of APIs/audio. All seven hatch channels are enabled with calibrated angles; see the firmware README for column order and mechanical checks. Servo calibration resides in ESP32 firmware; redeploying Pi Python alone does not apply it. Upload `firmware/ConnectFourGameTest/ConnectFourGameTest.ino` to ESP32 over USB with the Pi service and other serial owners stopped, then restart the Pi service.
-
-## References
-
-- [Gemini structured responses](https://ai.google.dev/gemini-api/docs/structured-output) and [model catalogue](https://ai.google.dev/gemini-api/docs/models)
-- [ElevenLabs create speech API](https://elevenlabs.io/docs/api-reference/text-to-speech/convert)
-- [Raspberry Pi remote access](https://www.raspberrypi.com/documentation/computers/remote-access.html) and [audio option guide](https://pip.raspberrypi.com/categories/1259-audio-camera-and-display)
-- [Serial protocol](PROTOCOL.md)
+Continuous servo holding requires suitable external power. Test unloaded startup, doors, buttons, all seven sensors and stop/fault behavior before loaded play. Passing software checks does not establish final disc seating, loaded retention or one-disc magazine isolation.

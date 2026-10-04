@@ -67,6 +67,7 @@ bool stopAllChannels() {
 
 void printHelp() {
   Serial.println("servo <0-7> <0-180>  : command approximate angle, e.g. servo 1 50");
+  Serial.println("servo <0-6> up/down; servo 7 load/unload: calibrated presets");
   Serial.println("off <0-7>           : stop pulses on one channel");
   Serial.println("off all             : disable all outputs");
   Serial.println("status              : show commanded positions and pulse state");
@@ -141,7 +142,11 @@ void handleCommand(char *line) {
   long degrees = 0;
   const bool isServoCommand = strcmp(tokens[0], "servo") == 0 && tokenCount == 3 &&
       parseIntegerInRange(tokens[1], 7, channel) &&
-      parseIntegerInRange(tokens[2], 180, degrees);
+      (parseIntegerInRange(tokens[2], 180, degrees) ||
+       (channel < 7 && strcmp(tokens[2], "up") == 0 && (degrees = ServoConfig::UP_ANGLES[channel], true)) ||
+       (channel < 7 && strcmp(tokens[2], "down") == 0 && (degrees = ServoConfig::DOWN_ANGLES[channel], true)) ||
+       (channel == 7 && strcmp(tokens[2], "load") == 0 && (degrees = ServoConfig::LOAD_ANGLE, true)) ||
+       (channel == 7 && strcmp(tokens[2], "unload") == 0 && (degrees = ServoConfig::UNLOAD_ANGLE, true)));
   const bool isOffAll = strcmp(tokens[0], "off") == 0 && tokenCount == 2 &&
       strcmp(tokens[1], "all") == 0;
   const bool isOffChannel = strcmp(tokens[0], "off") == 0 && tokenCount == 2 &&

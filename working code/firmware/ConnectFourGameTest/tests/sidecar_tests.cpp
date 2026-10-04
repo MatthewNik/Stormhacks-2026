@@ -6,10 +6,12 @@
 
 struct Replies : ProtocolReply {
   unsigned snapshots = 0;
+  unsigned reports = 0;
   uint32_t id = 0;
   std::string status;
   void snapshot() override { ++snapshots; }
   void commandResult(uint32_t value, const char *text) override { id = value; status = text; }
+  void diagnostics() override { ++reports; }
 };
 static void protocolLine(ProtocolReader &reader, Replies &reply, Fixture &f, const std::string &line) {
   f.clock(); for (char c : line) reader.feed(c,f.game,f.time,f.events,reply);
@@ -26,7 +28,7 @@ static void testButtons() {
   Fixture f; MenuButtons buttons;
   menuInput(buttons,f,false,false,false,40); click(buttons,f,2);
   assert(f.game.phase == Phase::AwaitClear); // clearing stays a terminal acknowledgement
-  f.game.command("confirm-clear",f.time); menuInput(buttons,f,false,false,false,40);
+  f.game.command("confirm-clear",f.time); f.until(Phase::ModeSelect); menuInput(buttons,f,false,false,false,40);
   assert(f.game.highlightedMode == Mode::FreePlay);
   click(buttons,f,1,10); assert(f.game.highlightedMode == Mode::FreePlay); // bounce
   click(buttons,f,1,1500);
@@ -55,19 +57,18 @@ static void testButtons() {
   click(buttons,f,0); assert(!f.game.robotFirst);
   click(buttons,f,1); assert(f.game.robotFirst);
   click(buttons,f,1); assert(!f.game.robotFirst);
-  click(buttons,f,2); assert(f.game.phase == Phase::RobotClosing);
+  click(buttons,f,2); assert(f.game.phase == Phase::HumanOpening);
   f.until(Phase::HumanReady);
   click(buttons,f,0); click(buttons,f,1); click(buttons,f,2);
   assert(f.game.phase == Phase::HumanReady && f.game.moveCount == 0);
 
   Fixture coach; MenuButtons coachButtons;
-  coach.game.command("confirm-clear",0); menuInput(coachButtons,coach,false,false,false,40);
+  coach.game.command("confirm-clear",0); coach.until(Phase::ModeSelect); menuInput(coachButtons,coach,false,false,false,40);
   click(coachButtons,coach,1); click(coachButtons,coach,2);
-  assert(coach.game.mode == Mode::Coach && coach.game.difficulty == 1 && !coach.game.robotFirst);
-  coach.until(Phase::HumanReady);
+  assert(coach.game.mode == Mode::FreePlay && coach.game.phase == Phase::ModeSelect);
 
   Fixture robot; MenuButtons robotButtons;
-  robot.game.command("confirm-clear",0); menuInput(robotButtons,robot,false,false,false,40);
+  robot.game.command("confirm-clear",0); robot.until(Phase::ModeSelect); menuInput(robotButtons,robot,false,false,false,40);
   click(robotButtons,robot,2); click(robotButtons,robot,2); click(robotButtons,robot,1); click(robotButtons,robot,2);
   assert(robot.game.human == 'X' && robot.game.robot == 'O'); robot.until(Phase::IndexerRelease);
 
@@ -81,31 +82,28 @@ static void testButtons() {
   assert(wrap.poll(true,1585) == ButtonAction::Press);
 }
 static void testProtocol() {
-  Fixture f; f.game.bootId = 42; f.humanStart();
-  ProtocolReader reader; Replies reply;
+  Fixture f; f.game.bootId = 42; f.humanStart(); ProtocolReader reader; Replies reply;
   protocolLine(reader,reply,f,"snapshot\n"); assert(reply.snapshots == 1);
-  protocolLine(reader,reply,f,"move 41 1 0 10 4\n"); assert(reply.status == "stale_game" && f.game.moveCount == 0);
+  protocolLine(reader,reply,f,"diagnose\n"); assert(reply.reports == 1 && f.game.moveCount == 0);
+  protocolLine(reader,reply,f,"move 41 1 0 10 4\n"); assert(reply.status == "stale_game");
   protocolLine(reader,reply,f,"move 42 1 1 10 4\n"); assert(reply.status == "stale_turn");
   protocolLine(reader,reply,f,"move 42 1 0 10 8\n"); assert(reply.status == "illegal_column");
   protocolLine(reader,reply,f,"move 42 1 0 10 4 extra\n"); assert(reply.status == "malformed");
   protocolLine(reader,reply,f,"move 4294967296 1 0 10 4\n"); assert(reply.status == "malformed");
-  protocolLine(reader,reply,f,"move 42 1 0 10 4\n"); assert(reply.status == "accepted" && f.game.moveCount == 1);
-  assert(f.game.history[0].column == 4 && f.game.history[0].symbol == 'O');
-  protocolLine(reader,reply,f,"move 42 1 0 10 4\n"); assert(reply.status == "duplicate" && f.game.moveCount == 1);
-  protocolLine(reader,reply,f,"status 10\n"); assert(reply.status == "duplicate" && reply.id == 10);
-  protocolLine(reader,reply,f,"status 999\n"); assert(reply.status == "not_accepted" && reply.id == 999);
-  f.until(Phase::IndexerRelease); assert(f.game.moveCount == 1);
-  finishRobot(f); assert(f.game.moveCount == 2 && f.game.history[1].symbol == 'X');
-  protocolLine(reader,reply,f,"move 42 1 2 10 5\n"); assert(reply.status == "duplicate");
-  protocolLine(reader,reply,f,"move 42 1 2 11 5\n"); assert(reply.status == "accepted" && f.game.moveCount == 3);
+  for (int i = 0; i < 2; ++i) {
+    protocolLine(reader,reply,f,"move 42 1 0 10 4\n"); assert(reply.status == "sensor_only" && f.game.moveCount == 0);
+  }
+  protocolLine(reader,reply,f,"status 10\n"); assert(reply.status == "not_accepted");
+  humanMove(f,3); f.until(Phase::IndexerRelease); finishRobot(f);
+  assert(f.game.moveCount == 2 && f.game.history[1].symbol == 'X');
   auto state = stateFrame(f.game,"snapshot",1);
-  assert(state.valid && state.size < JsonFrame::CAPACITY && strstr(state.data,"\"move_number\":3"));
-  f.game.restart(); assert(f.game.moveCount == 3);
-  f.game.command("confirm-clear",f.time); assert(f.game.gameId == 2 && f.game.moveCount == 0);
-  Fixture early; early.start();
-  protocolLine(reader,reply,early,"move 0 1 0 12 ");
-  early.until(Phase::HumanReady); protocolLine(reader,reply,early,"4\n");
-  assert(reply.status == "not_ready" && early.game.moveCount == 0);
+  assert(state.valid && strstr(state.data,"\"move_number\":2"));
+  for (auto phase : {Phase::StartupPositioning,Phase::HumanBaseline,Phase::HumanConfirm,Phase::IndexerReset}) {
+    f.game.phase = phase; assert(strcmp(phaseName(phase),"Unknown"));
+  }
+  f.game.fault();
+  protocolLine(reader,reply,f,"snapshot\n"); assert(reply.reports == 2 && f.game.phase == Phase::Fault);
+  protocolLine(reader,reply,f,"diagnose\n"); assert(reply.reports == 3 && !f.io.enabled);
 }
 static void testTelemetry() {
   JsonFrame frame; frame.add("{"); frame.quoted("a\"\n\\b"); frame.add("}\n");
@@ -121,22 +119,20 @@ static void testTelemetry() {
   assert(stateFrame(full.game,"snapshot",UINT32_MAX).valid);
 }
 static void testCoach() {
-  Fixture f; f.game.command("confirm-clear",0); f.game.command("coach",0);
-  assert(f.game.mode == Mode::Coach && f.game.difficulty == 1 && !f.game.robotFirst);
-  f.until(Phase::HumanReady); f.line("1\n"); f.until(Phase::IndexerRelease);
-  assert(f.game.pendingColumn == 3 && f.game.moveCount == 1);
-  finishRobot(f);
+  Fixture f; selectMenu(f); const auto writes = f.io.writes.size();
+  f.game.command("coach",f.time);
+  assert(f.game.mode == Mode::FreePlay && f.game.phase == Phase::ModeSelect && f.io.writes.size() == writes);
 }
 int main(int argc, char **) {
   if (argc > 1) {
     Fixture f; f.game.bootId = 42; f.humanStart();
     printf("%s",stateFrame(f.game,"snapshot",0).data);
-    f.line("4\n"); f.until(Phase::IndexerRelease);
+    humanMove(f,3); f.until(Phase::IndexerRelease);
     printf("%s",stateFrame(f.game,"move",0).data);
     finishRobot(f); printf("%s",stateFrame(f.game,"snapshot",0).data);
     return 0;
   }
   testButtons(); testProtocol(); testTelemetry(); testCoach();
-  puts("PASS: three-button navigation/confirmation, debounce/held/chord/release handling, turn tags, history, bounded telemetry and coach opening.");
+  puts("PASS: three-button navigation/confirmation, debounce/held/chord/release handling, sensor-only protocol, history, bounded telemetry and unavailable coach.");
   return 0;
 }

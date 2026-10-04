@@ -16,6 +16,11 @@ constexpr size_t COMMAND_BUFFER_SIZE = 96;
 constexpr uint32_t BUS_CHECK_INTERVAL_MS = 1000;
 constexpr uint32_t LINK_TIMEOUT_MS = 2000;
 
+// PCA0 is front-right; up/open and down/closed presets match the full game.
+constexpr uint16_t UP_ANGLES[7] = {115,110,100,105,100,115,110};
+constexpr uint16_t DOWN_ANGLES[7] = {15,8,11,12,11,12,12};
+constexpr uint16_t LOAD_ANGLE = 110, UNLOAD_ANGLE = 180;
+
 struct PulseEndpoints {
   uint16_t minimumUs;
   uint16_t maximumUs;

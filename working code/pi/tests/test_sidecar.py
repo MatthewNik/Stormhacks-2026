@@ -249,39 +249,104 @@ class WorkerTests(unittest.TestCase):
 
 
 class TerminalTests(unittest.TestCase):
-    def test_unchanged_snapshot_resumes_coaching_after_reconnect(self):
+    def test_reconnect_logs_ir_moves_without_coaching_or_replay(self):
         with tempfile.TemporaryDirectory(dir=TEST_ROOT) as directory:
-            coach = Mock()
-            app = Application(Config(), directory, coach, Mock(), Mock())
-            app.handle(state())
-            self.assertEqual(coach.observe.call_count, 1)
-            app.handle({"type": "link", "connected": False})
-            app.handle({"type": "link", "connected": True})
-            app.handle(state())
-            self.assertEqual(coach.observe.call_count, 2)
-
-    def test_only_synchronized_turns_send_moves_and_no_auto_replay(self):
-        with tempfile.TemporaryDirectory(dir=TEST_ROOT) as directory:
-            link, coach = Mock(), Mock()
-            link.send.return_value = True
+            coach, link = Mock(), Mock()
             app = Application(Config(), directory, coach, link, Mock())
-            app.command("4")
-            link.send.assert_not_called()
-            app.handle(state())
-            app.command("4")
-            line = link.send.call_args.args[0]
-            self.assertTrue(line.startswith("move 42 1 0 "))
-            app.command("5")
-            self.assertEqual(link.send.call_count, 1)
+            app.handle(state(mode="free"))
+            for column in "1234567":
+                app.command(column)
             app.handle({"type": "link", "connected": False})
             app.handle({"type": "link", "connected": True})
-            self.assertEqual(link.send.call_count, 1)
-            app.handle(state((4,), phase="ClosingForRobot", revision=2))
-            app.command("5")
-            self.assertEqual(link.send.call_count, 1)
+            app.handle(state((4, 3), mode="free", revision=3))
+            app.handle(state((4, 3), mode="free", revision=3))
+            link.send.assert_not_called()
+            self.assertEqual(app.store.moves, state((4, 3))["moves"])
+            self.assertFalse(coach.mock_calls)
+
+    def test_default_startup_with_keys_never_constructs_services(self):
+        with tempfile.TemporaryDirectory(dir=TEST_ROOT) as directory:
+            with patch("connect4.providers.Gemini", side_effect=AssertionError("Gemini constructed")), patch(
+                    "connect4.providers.ElevenLabs", side_effect=AssertionError("TTS constructed")), patch(
+                    "connect4.workers.CoachService", side_effect=AssertionError("Coach constructed")), patch(
+                    "socket.create_connection", side_effect=AssertionError("Network call")):
+                app = Application(Config(gemini_key="test", elevenlabs_key="test", speech=True),
+                                  directory, link=Mock(), printer=Mock())
+                app.handle(state(mode="free"))
+                app.handle(state((1, 2, 1, 2, 1, 2, 1), phase="Ended", mode="free", revision=8))
+                app.command("coach")
+                app.link.send.assert_not_called()
+                self.assertFalse(any(p.name == "audio-cache" for p in Path(directory).iterdir()))
+
+    def test_starter_and_control_commands_remain_available(self):
+        with tempfile.TemporaryDirectory(dir=TEST_ROOT) as directory:
+            link = Mock()
+            app = Application(Config(), directory, link=link, printer=Mock())
+            app.handle(state(phase="FirstPlayer", mode="free"))
+            app.command("1")
+            app.command("0")
+            app.command("stop")
+            app.command("diagnose")
+            self.assertEqual([c.args[0] for c in link.send.call_args_list], ["1", "0", "stop", "diagnose"])
+
+    def test_all_new_phases_validate(self):
+        for phase in ("StartupPositioning", "HumanBaseline", "HumanConfirm", "IndexerReset"):
+            self.assertEqual(validate_state(state(phase=phase))["phase"], phase)
+
+    def test_pca_detail_prints_once_and_can_be_requested_again(self):
+        with tempfile.TemporaryDirectory(dir=TEST_ROOT) as directory:
+            printer, link = Mock(), Mock()
+            app = Application(Config(), directory, link=link, printer=printer)
+            detail = {"type": "message", "text": "PCA detail: register 0xFE read failed"}
+            for _ in range(4):
+                app.handle(detail)
+            printer.assert_called_once_with(detail["text"])
+            app.command("diagnose")
+            app.handle(detail)
+            self.assertEqual(printer.call_count, 2)
+            link.send.assert_called_once_with("diagnose")
+            app.handle({"type": "link", "connected": True})
+            app.handle(detail)
+            self.assertEqual(sum(c.args == (detail["text"],) for c in printer.call_args_list), 3)
+            app.handle({"type": "message", "text": "PCA detail: another error"})
+            self.assertEqual(printer.call_args.args[0], "PCA detail: another error")
 
 
 class TransportTests(unittest.TestCase):
+    def test_silent_connection_notice_then_snapshot_recovery(self):
+        events = []
+        link = SerialLink("fake", events.append)
+        frame = json.dumps(state()).encode() + b"\n"
+
+        class Port:
+            reads = 0
+
+            def write(self, data):
+                return len(data)
+
+            def read(self, limit):
+                self.reads += 1
+                if self.reads == 2:
+                    return frame
+                if self.reads == 3:
+                    link.stopped.set()
+                return b""
+
+        with patch("connect4.transport.time.monotonic", side_effect=[0, 0, 6, 12]):
+            link._session(Port())
+        notices = [e for e in events if e.get("type") == "notice"]
+        self.assertEqual(len(notices), 1)
+        self.assertIn("No ESP32 game snapshot", notices[0]["text"])
+        self.assertIn(state(), events)
+
+    def test_incomplete_snapshot_write_disconnects(self):
+        link = SerialLink("fake", lambda event: None)
+        port = Mock()
+        port.write.return_value = 1
+        with self.assertRaisesRegex(OSError, "Incomplete snapshot request"):
+            link._session(port)
+        port.read.assert_not_called()
+
     def test_fragmented_serial_boot_text_oversize_and_disconnect_queue(self):
         events = []
         link = SerialLink("fake", events.append)

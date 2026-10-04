@@ -1,83 +1,89 @@
-# Update the Pi and ESP32
+# Install the full IR game on Pi and ESP32
 
-These commands use the existing Pi user `matthew`, deployment directory `~/stormhacks-rpi`, and CP2102 USB serial path recorded in handoff 008. Use the actual hostname/IP you already use for SSH. This upload targets the classic ESP32 Dev Module.
+Use Pi user `matthew`, directory `~/stormhacks-rpi`, and a classic ESP32 Dev Module. The packages are `deployment/firmware.bin` (merged image), `pi-update.zip`, and `SHA256SUMS`. This installation has no APIs, speech or coaching; Coach is an unavailable OLED option.
 
-## Stop the current program
+## Stop and prepare
 
-In the running Connect Four terminal, enter these separately:
+In the running Pi program enter `stop`, then `quit`. Switch external servo power off; leave ESP32 connected to Pi USB and close other serial owners. Flashing resets the logical board/history. Do not resume an existing physical game after flashing. Existing remote `.env`, virtual environments, logs and Bluetooth settings are preserved by the source package.
 
-```text
-stop
-quit
-```
+## Windows PowerShell
 
-If it is not running, skip this step. Leave ESP32 connected to Pi USB; close all other serial owners. Switch external servo power off. Flashing resets ESP32 and clears RAM game history. The merged image also replaces the flash image and may replace stored flash settings; do not resume a physical game after upload. The Pi's `.env` and audio configuration are not included or overwritten.
-
-## Send the full version from Windows PowerShell
+The saved deployment packages are ready after successful validation. To rebuild them locally, run:
 
 ```powershell
 Set-Location 'C:\Users\matth\Documents\Stormhacks2026 Oct 3-4'
-$PiHost = Read-Host 'Enter the Pi hostname or IP you use for SSH'
+& '.\working code\compile-firmware.ps1'
+& '.\working code\package-deployment.ps1'
+```
+
+Stop if any command fails. Transfer the packages:
+
+```powershell
+Set-Location 'C:\Users\matth\Documents\Stormhacks2026 Oct 3-4'
+$PiHost = Read-Host 'Pi hostname or IP'
 ssh "matthew@$PiHost" 'mkdir -p ~/stormhacks-rpi/full-update'
 scp 'working code/deployment/firmware.bin' 'working code/deployment/pi-update.zip' 'working code/deployment/SHA256SUMS' "matthew@${PiHost}:~/stormhacks-rpi/full-update/"
 ssh "matthew@$PiHost"
 ```
 
-## Apply the full version in the Pi SSH shell
+## Pi dependency setup
 
-Run each step in order. Stop if a command fails. Both checksum checks must report OK before extraction or flashing.
+On a fresh Pi OS installation, run:
 
 ```bash
+set -e
+sudo apt update
+sudo apt install -y python3-venv python3-pip
+sudo usermod -aG dialout matthew
+exit
+```
+
+Reconnect from Windows so group membership takes effect:
+
+```powershell
+ssh "matthew@$PiHost"
+```
+
+## Install and flash in Pi SSH
+
+Keep servo power off. Both checksum entries must report OK. Stop on errors:
+
+```bash
+set -e
 cd ~/stormhacks-rpi/full-update
 sha256sum -c SHA256SUMS
 python3 -m zipfile -e pi-update.zip ../pi
+
 cd ~/stormhacks-rpi/pi
+python3 -m venv .venv
 .venv/bin/python -m pip install --timeout 120 --retries 10 -r requirements.txt
+
 cd ~/stormhacks-rpi
-.flash-venv/bin/python -m esptool version
+python3 -m venv .flash-venv
+.flash-venv/bin/python -m pip install --timeout 120 --retries 10 'esptool>=5,<6'
 ls -l /dev/serial/by-id/
 .flash-venv/bin/python -m esptool --chip esp32 --port /dev/serial/by-id/usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_Controller_0001-if00-port0 --baud 115200 write-flash 0x0 full-update/firmware.bin
 ```
 
-If `esptool version` reports a missing module, finish installation before flashing:
+If the listing shows a different serial path, substitute it in flashing and startup. If automatic connection fails, hold BOOT, tap EN and release BOOT when the uploader connects. See [Espressif flashing commands](https://docs.espressif.com/projects/esptool/en/latest/esp32/esptool/basic-commands.html).
 
-```bash
-python3 -m venv .flash-venv
-.flash-venv/bin/python -m pip install --timeout 120 --retries 10 'esptool>=5,<6'
-```
+## Start and check
 
-If the serial listing shows a different path, use that actual path. If upload cannot connect automatically, hold BOOT, tap EN, and release BOOT when the uploader connects. Leave servo power off during flashing.
+Connect hardware according to [WIRING.md](WIRING.md); disconnect USB and external power before rewiring. PCA9685 must be present at boot or ESP32 latches Fault. Physically clear the board/indexer/feed path and keep discs out for the first motion check.
 
-## Start the Pi program
-
-With USB and external power disconnected, connect PCA9685 logic/OE and the OLED/buttons/sensors following the firmware README. The full version requires PCA9685; absence causes a latched fault that requires connecting it and resetting ESP32. Start with external servo power off, reconnect logic power, and verify the display/buttons first. Clear the physical board, magazine indexer and feed path before acknowledging clearing.
-
-For the first check without API calls or speech:
+With servo power off, run:
 
 ```bash
 cd ~/stormhacks-rpi/pi
-.venv/bin/python -m connect4 --local-only
+.venv/bin/python -m connect4 --serial-port /dev/serial/by-id/usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_Controller_0001-if00-port0
 ```
 
-Inside the running Connect Four terminal (not Bash), enter:
+Enable servo power to check commanded startup positions: PCA0–6 up/open at 115/110/100/105/100/115/110°, PCA7 load 110°. All position signals remain active. When the OLED reaches Mode, browse Free Play/Coach with Left/Right; Coach shows Unavailable. Centre confirms Free Play, difficulty, then starter. Wait for **Insert ONE disc** before human insertion. IR registers the column; do not type it.
 
-```text
-confirm-clear
-```
+For unloaded robot sequencing, the engine-selected door stays open while the others close; PCA7 commands release 180°. With no IR passage this intentionally pauses after timeout, without repeating a release. Use restart and physical clearing before another test. Qualify all real sensor passages and magazine isolation before loaded play.
 
-The OLED should now show Mode without the TEST label. Left/GPIO13 and Right/GPIO14 browse; Centre/GPIO23 confirms. Each button shorts its GPIO to GND. Release between presses. Use unloaded servo checks before any discs; do not confirm a start until ready for motion.
+Healthy boot needs no initial `confirm-clear`. Explicit restart does: `restart`, physically clear, then `confirm-clear`. `stop` disables all motor outputs; `quit` alone leaves ESP32 running. Serial reopen may reset the controller, automatically repositioning motors and starting an empty logical game.
 
-After stopping with `stop`, then `quit`, run the full API/audio service using the existing `.env`:
+OLED shows only setup menus and plain turn/status text; board diagrams remain in the Pi terminal. If PCA Fault appears, enter `diagnose` in the running Pi program and retain the `PCA detail:` line. That line distinguishes address/communication errors from initialization/register/configuration/write failures. It is also repeated automatically in Fault snapshots, and diagnosis does not clear the fault or move motors.
 
-```bash
-cd ~/stormhacks-rpi/pi
-.venv/bin/python -m connect4
-```
-
-A serial reopen can reset the ESP32; only enter `confirm-clear` after physically checking it again if requested.
-
-## Local rebuilds
-
-From this full-hardware directory, run `compile-firmware.ps1` followed by `package-deployment.ps1`. No switch is needed: this build script always compiles the full hardware version with MENU_TEST_ONLY=0. Build and package errors must be resolved before copying artifacts. Packages include checksums for transfer verification. Build outputs, temporary files and deployment artifacts stay inside each directory.
-
-Sources: [Espressif flashing guide](https://docs.espressif.com/projects/esptool/en/latest/esp32/esptool/flashing-firmware.html), [merged firmware images](https://docs.espressif.com/projects/esptool/en/latest/esp32/esptool/basic-commands.html).
+Build 017 restores the working motor-command program's PCA setup and primary repeated-start register reads, retaining a checked STOP-separated fallback. Update both firmware and Pi source. The terminal should print `Connect Four build 017: motor-compatible PCA control; IR game; no APIs.` after an ESP32 reset. On an already running ESP32 this startup line may have passed before the connection, but `snapshot` and `diagnose` remain available. A USB connection with no game snapshot for six seconds now produces a notice; opening a serial port does not prove that game firmware is responding.

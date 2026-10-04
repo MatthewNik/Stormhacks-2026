@@ -80,7 +80,7 @@ struct Fixture {
   }
   void line(const std::string &text) { clock(); for (char c : text) reader.feed(c,game,time,events); }
   void start(const char *first = "0", const char *level = "easy") {
-    clock(); game.restart(); game.command("confirm-clear",time); game.command("free",time); game.command(level,time); game.command(first,time);
+    clock(); game.restart(); game.command("confirm-clear",time); until(Phase::ModeSelect); game.command("free",time); game.command(level,time); game.command(first,time);
   }
   void humanStart(const char *level = "easy") { start("0",level); until(Phase::HumanReady); }
 };
@@ -135,7 +135,7 @@ static unsigned indexWrites(const Fixture &f, int angle = -1) {
   return count;
 }
 static void toRelease(Fixture &f) {
-  f.humanStart(); f.line("4\n"); f.until(Phase::IndexerRelease);
+  f.humanStart(); f.pulse(3); f.until(Phase::IndexerRelease);
 }
 static void finishRobot(Fixture &f) {
   const auto before = f.game.board;
@@ -146,89 +146,98 @@ static void finishRobot(Fixture &f) {
   f.until(Phase::HumanReady);
   assert(discs(f.game.board) == discs(before)+1 && f.game.board.cells[5][target] != '.');
 }
-static void testMenusAndInput() {
-  Fixture f; f.game.restart(); assert(f.game.phase == Phase::AwaitClear && !f.io.enabled);
-  f.line("0\neasy\n"); assert(f.game.phase == Phase::AwaitClear);
-  f.line("confirm-clear\n2\n0 extra\n"); assert(f.game.phase == Phase::ModeSelect);
-  f.line(" free \r\n"); assert(f.game.human == 'O' && f.game.robot == 'X' && !f.io.enabled);
-  f.line("EASY\n5\n"); assert(f.game.phase == Phase::Difficulty);
-  f.line("medium\r\n0\n1"); f.until(Phase::HumanReady); f.line("\n"); assert(discs(f.game.board) == 0);
-  const auto before = f.game.board;
-  for (const char *bad : {"0\n","8\n","-1\n","1.0\n","01\n","1 2\n","1x\n","hard\n","\n"," \n"}) f.line(bad);
-  f.line(std::string(80,'1')+"\n"); f.line(std::string("1\0",2)+"\n"); f.line("1\x80\n");
-  assert(equal(f.game.board,before) && f.game.phase == Phase::HumanReady && f.game.difficulty == 1);
-  for (int c = 0; c < 7; ++c) f.pulse(uint8_t(c));
-  assert(!f.sensors.enabled && equal(f.game.board,before));
-  const auto count = f.events.boards; f.line("board\nhelp\n"); assert(f.events.boards == count+1);
-  for (int i = 0; i < 6; ++i) f.game.board.drop(0,i%2 ? 'X' : 'O');
-  const auto full = f.game.board; f.line("1\n"); assert(equal(f.game.board,full));
-  f.line("2\r\n3\n"); assert(discs(f.game.board) == 7 && f.game.board.cells[5][1] == 'O');
-  for (const char *level : {"easy","medium","hard"}) {
-    Fixture robot; robot.start("1",level); robot.until(Phase::IndexerRelease);
-    assert(robot.game.human == 'X' && robot.game.robot == 'O' && discs(robot.game.board) == 0);
-    assert(robot.game.pendingColumn == 3 && robot.io.pulses[3]);
-    finishRobot(robot); assert(robot.game.board.cells[5][3] == 'O');
-    robot.line("1\n"); assert(robot.game.board.cells[5][0] == 'X');
+
+inline void selectMenu(Fixture &f) {
+  f.game.startup(f.time); f.until(Phase::ModeSelect);
+}
+static void humanMove(Fixture &f, uint8_t column) {
+  f.pulse(column); f.until(Phase::RobotSearch);
+}
+static void testAutomaticStartup() {
+  Fixture f; f.game.startup(0);
+  assert(f.game.phase == Phase::StartupPositioning && !f.port.capturing);
+  f.line("free\neasy\n1\n"); assert(f.game.phase == Phase::StartupPositioning);
+  f.until(Phase::ModeSelect);
+  assert(f.game.gameId == 1 && f.game.moveCount == 0 && f.io.writes.size() == 8);
+  for (int c = 0; c < 8; ++c) {
+    assert(f.io.writes[c].channel == c && f.io.writes[c].time == uint32_t(c*50));
+    assert(f.io.writes[c].angle == (c == 7 ? 110 : Config::HATCHES[c].open));
+    assert(f.io.pulses[c]);
   }
+  assert(f.time >= 650 && f.io.enabled);
+  const auto count = f.io.writes.size();
+  f.advance(5000); assert(f.io.writes.size() == count && f.io.enabled);
+  f.line("coach\n"); assert(f.game.phase == Phase::ModeSelect && f.game.mode == Mode::FreePlay);
+  f.game.restart(); assert(f.game.phase == Phase::AwaitClear && !f.io.enabled);
+  f.advance(1000); assert(f.io.writes.size() == count);
+  f.line("confirm-clear\n"); f.until(Phase::ModeSelect); assert(f.game.gameId == 2);
+  Fixture bad; bad.io.fail = true; bad.game.startup(0);
+  assert(bad.game.phase == Phase::Fault && !bad.io.enabled);
 }
 static void testScheduler() {
-  FakeIO io; HatchSequence seq(io);
-  seq.begin(0x7f,0);
-  assert(seq.command(7,90,0));
-  for (uint32_t t = 0; t < 600; ++t) { io.time = t; seq.tick(t); assert(seq.busy()); }
-  io.time = 600; seq.tick(600); assert(!seq.busy() && !io.enabled && io.writes.size() == 8);
-  for (int c = 0; c < 7; ++c) assert(io.writes[c+1].channel == c && io.writes[c+1].time == uint32_t(c*50));
+  FakeIO io; HatchSequence seq(io); seq.beginStartup(0);
+  for (uint32_t t = 0; t <= 650; ++t) { io.time = t; seq.tick(t); }
+  assert(!seq.busy() && io.writes.size() == 8 && io.enabled);
+  seq.tick(100000); for (bool pulse : io.pulses) assert(pulse);
+  seq.begin(1 << 4,100000);
+  for (uint32_t dt = 0; dt <= 600; ++dt) { io.time = 100000+dt; seq.tick(io.time); }
+  for (int c = 0; c < 7; ++c) assert(io.writes[8+c].angle == (c == 4 ? Config::HATCHES[c].open : Config::HATCHES[c].closed));
+  assert(io.pulses[7]); seq.disable(); assert(!io.enabled);
   for (bool pulse : io.pulses) assert(!pulse);
-  // Closing uses the same stagger; delayed ticks never catch up in a burst.
-  {
-    FakeIO closeIO; HatchSequence closing(closeIO); closing.begin(0,1000);
-    for (uint32_t dt = 0; dt <= 600; ++dt) { closeIO.time = 1000+dt; closing.tick(closeIO.time); }
-    assert(closeIO.writes.size() == 7 && !closing.busy());
-    for (int c = 0; c < 7; ++c) {
-      assert(closeIO.writes[c].channel == c);
-      assert(closeIO.writes[c].angle == Config::HATCHES[c].closed);
-      assert(closeIO.writes[c].time == uint32_t(1000+c*50));
-    }
-    closeIO.writes.clear(); closing.begin(1 << 4,2000);
-    closeIO.time = 2000; closing.tick(2000);
-    closeIO.time = 2400; closing.tick(2400);
-    closing.tick(2400); assert(closeIO.writes.size() == 2);
-    closeIO.time = 2449; closing.tick(2449); assert(closeIO.writes.size() == 2);
-    closeIO.time = 2450; closing.tick(2450); assert(closeIO.writes.size() == 3);
-  }
-  // Hatch begin must preserve an independently active indexer and its deadline.
-  assert(seq.command(7,90,1000)); seq.begin(0,1100); seq.tick(1100);
-  assert(io.pulses[7]); seq.tick(1300); assert(!io.pulses[7] && io.enabled);
-  seq.disable(); assert(!io.enabled); for (bool pulse : io.pulses) assert(!pulse);
   seq.begin(0,UINT32_MAX-100);
   for (uint32_t dt = 0; dt <= 600; ++dt) seq.tick(uint32_t(UINT32_MAX-100+dt));
-  assert(!seq.busy() && !io.enabled);
-  assert(seq.openTarget(0,4000)); seq.tick(5599); assert(io.pulses[0]); seq.tick(5600); assert(!io.pulses[0]);
-  assert(seq.command(7,90,6000)); io.fail = true; seq.tick(6300); assert(seq.faulted && !io.enabled);
+  assert(!seq.busy() && io.enabled);
+  io.fail = true; assert(!seq.command(7,110,4000) && seq.faulted && !io.enabled);
+}
+static void testHumanSensors() {
+  for (uint8_t c = 0; c < 7; ++c) {
+    Fixture f; f.humanStart();
+    assert(f.sensors.enabled && f.port.capturing && f.io.enabled);
+    f.advance(10000); assert(f.game.phase == Phase::HumanReady && f.game.moveCount == 0);
+    const auto before = f.game.board;
+    f.line("1\n2\n7\n01\n"); assert(equal(before,f.game.board));
+    f.pulse(c,1); f.advance(100); assert(f.game.phase == Phase::HumanReady && f.game.moveCount == 0);
+    f.edge(c,true); f.advance(5); assert(f.game.phase == Phase::HumanConfirm && f.game.moveCount == 0);
+    f.edge(c,false); f.advance(21); assert(f.game.moveCount == 0);
+    f.until(Phase::RobotSearch);
+    assert(f.game.moveCount == 1 && f.game.history[0].column == c+1 && f.game.history[0].symbol == 'O');
+  }
+  for (int failure = 0; failure < 5; ++failure) {
+    Fixture f; f.humanStart(); const auto before = f.game.board;
+    if (failure == 0) { f.pulse(0); f.pulse(0); }
+    if (failure == 1) { f.edge(0,true); f.edge(1,true); f.advance(5); }
+    if (failure == 2) { f.edge(0,true); f.advance(1001); }
+    if (failure == 3) { for (unsigned i = 0; i <= Config::EDGE_QUEUE_SIZE; ++i) f.port.edge(0,i%2==0,f.time*1000+i); f.tick(); }
+    if (failure == 4) { f.pulse(0); for (int i = 0; i < 100 && f.game.phase != Phase::Paused; ++i) { f.pulse(1,1); f.advance(20); } }
+    assert(f.game.phase == Phase::Paused && equal(before,f.game.board) && !f.io.enabled && !f.sensors.enabled);
+  }
+  Fixture full; full.humanStart(); for (int i = 0; i < 6; ++i) full.game.board.drop(0,i%2 ? 'X' : 'O');
+  const auto before = full.game.board; full.pulse(0);
+  assert(full.game.phase == Phase::Paused && equal(before,full.game.board));
+  Fixture baseline; baseline.start(); baseline.until(Phase::HumanOpening); baseline.port.levels[0] = true;
+  baseline.until(Phase::Paused); assert(baseline.game.moveCount == 0 && !baseline.io.enabled);
 }
 static void testSequencing() {
-  Fixture f; f.humanStart();
-  assert(f.io.writes.size() == 14);
-  f.line("4\n"); const auto before = f.game.board; const auto offset = f.io.writes.size();
-  f.until(Phase::IndexerLoading);
-  assert(equal(before,f.game.board) && f.events.searches == 1 && indexWrites(f,Config::INDEXER.open) == 1 && indexWrites(f,Config::INDEXER.closed) == 0);
-  for (int c = 0; c < 7; ++c) assert(f.io.writes[offset+c].angle == Config::HATCHES[c].closed);
-  assert(f.io.writes[offset+7].channel == f.game.pendingColumn && f.io.writes[offset+7].angle == Config::HATCHES[f.game.pendingColumn].open);
-  const uint32_t loadAt = f.io.writes.back().time;
-  f.until(Phase::IndexerRelease);
-  assert(f.io.writes.back().channel == 7 && f.io.writes.back().angle == Config::INDEXER.closed);
-  assert(f.io.writes.back().time-loadAt >= 800 && equal(before,f.game.board));
-  finishRobot(f);
-  const auto after = f.game.board;
-  f.advance(4000); assert(equal(after,f.game.board) && indexWrites(f) == 2 && !f.io.enabled);
-  // New robot turn cannot reuse a prior human pulse/history.
-  f.pulse(0); f.line("1\n"); f.until(Phase::IndexerRelease);
-  const auto pending = f.game.board; f.advance(3010);
-  assert(f.game.phase == Phase::Paused && equal(pending,f.game.board) && indexWrites(f) == 4);
-  Fixture full; full.humanStart();
-  for (int r = 0; r < 6; ++r) full.game.board.drop(0,r%2 ? 'X' : 'O');
-  full.line("4\n"); full.until(Phase::IndexerRelease); finishRobot(full);
-  assert(full.io.writes[full.io.writes.size()-7].channel == 0 && full.io.writes[full.io.writes.size()-7].angle == Config::HATCHES[0].closed);
+  for (const char *level : {"easy","medium","hard"}) for (const char *first : {"0","1"}) {
+    Fixture f; f.start(first,level);
+    if (*first == '0') { f.until(Phase::HumanReady); humanMove(f,3); }
+    const auto before = f.game.board; const auto offset = f.io.writes.size();
+    f.until(Phase::IndexerLoading); const int target = f.game.pendingColumn;
+    assert(target >= 0 && equal(before,f.game.board));
+    for (int c = 0; c < 7; ++c) {
+      const auto &w = f.io.writes[offset+c]; assert(w.channel == c);
+      assert(w.angle == (c == target ? Config::HATCHES[c].open : Config::HATCHES[c].closed));
+      if (c) assert(w.time-f.io.writes[offset+c-1].time >= 50);
+    }
+    const auto loads = indexWrites(f,110); f.until(Phase::IndexerRelease);
+    assert(indexWrites(f,180) == 1 && f.io.writes.back().time-f.io.writes[f.io.writes.size()-2].time >= 800);
+    finishRobot(f);
+    assert(indexWrites(f,110) == loads+1 && indexWrites(f,180) == 1 && f.io.enabled);
+    assert(f.game.history[f.game.moveCount-1].symbol == f.game.robot);
+    for (int c = 0; c < 7; ++c) assert(f.io.writes[f.io.writes.size()-7+c].angle == Config::HATCHES[c].open);
+    f.advance(5000); assert(f.game.phase == Phase::HumanReady && indexWrites(f,180) == 1);
+    humanMove(f,0); f.until(Phase::IndexerRelease); assert(indexWrites(f,180) == 2);
+  }
 }
 static void testSensorFailures() {
   for (int mode = 0; mode < 7; ++mode) {
@@ -240,130 +249,159 @@ static void testSensorFailures() {
     if (mode == 4) { for (unsigned i = 0; i <= Config::EDGE_QUEUE_SIZE; ++i) f.port.edge(0,i%2==0,f.time*1000+i); f.tick(); }
     if (mode == 5) { f.pulse(uint8_t(target)); f.until(Phase::RobotClosing); f.pulse(uint8_t(target)); }
     if (mode == 6) { f.pulse(uint8_t(target)); f.until(Phase::RobotQuiet); for (int i = 0; i < 50 && f.game.phase != Phase::Paused; ++i) { f.pulse(0,1); f.advance(30); } }
-    assert(f.game.phase == Phase::Paused && equal(before,f.game.board) && !f.io.enabled && indexWrites(f) == 2);
-    f.advance(4000); assert(indexWrites(f) == 2 && equal(before,f.game.board));
+    assert(f.game.phase == Phase::Paused && equal(before,f.game.board) && !f.io.enabled && indexWrites(f,180) == 1);
+    const auto writes = f.io.writes.size(); f.advance(4000); assert(f.io.writes.size() == writes);
   }
-  Fixture early; early.humanStart(); early.line("4\n"); early.until(Phase::IndexerLoading);
+  Fixture early; early.humanStart(); humanMove(early,3); early.until(Phase::IndexerLoading);
   const auto before = early.game.board; early.pulse(uint8_t(early.game.pendingColumn));
-  assert(early.game.phase == Phase::Paused && equal(before,early.game.board) && indexWrites(early,Config::INDEXER.closed) == 0);
-  Fixture crossing; crossing.humanStart(); crossing.line("4\n"); crossing.until(Phase::IndexerLoading);
-  // A pre-release LOW must not become eligible merely because its clear edge is later.
+  assert(early.game.phase == Phase::Paused && equal(before,early.game.board) && indexWrites(early,180) == 0);
+  Fixture crossing; crossing.humanStart(); humanMove(crossing,3); crossing.until(Phase::IndexerLoading);
   crossing.edge(uint8_t(crossing.game.pendingColumn),true); crossing.advance(1);
-  crossing.until(Phase::Paused); assert(indexWrites(crossing,Config::INDEXER.closed) == 0);
-  Fixture active; active.humanStart(); active.edge(0,true); active.line("4\n"); active.until(Phase::Paused);
-  assert(indexWrites(active) == 0);
-  // Repeated short noise prevents baseline clear without feeding.
-  Fixture baseline; baseline.humanStart(); baseline.line("4\n"); baseline.until(Phase::RobotBaseline);
-  for (int i = 0; i < 60 && baseline.game.phase != Phase::Paused; ++i) { baseline.pulse(0,1); baseline.advance(30); }
-  assert(baseline.game.phase == Phase::Paused && indexWrites(baseline) == 0);
+  crossing.until(Phase::Paused); assert(indexWrites(crossing,180) == 0);
+  Fixture baseline; baseline.start("1"); baseline.until(Phase::RobotBaseline);
+  baseline.pulse(0); assert(baseline.game.phase == Phase::Paused && indexWrites(baseline,180) == 0);
 }
 struct Observer : SensorObserver {
-  unsigned detects = 0, passages = 0, errors = 0;
-  uint32_t start = 0;
+  unsigned detects = 0, passages = 0, errors = 0; uint32_t start = 0;
   void detected(uint8_t, uint32_t at) override { ++detects; start = at; }
   void passage(uint8_t, uint32_t at) override { ++passages; assert(at == start); }
   void sensorProblem(const char *) override { ++errors; }
 };
 static void testQualification() {
-  FakeSensors port; SensorService service(port); Observer observer;
-  service.reset(true);
+  FakeSensors port; SensorService service(port); Observer observer; service.reset(true);
   port.edge(0,true,1000); port.edge(0,false,1500); service.poll(22000,observer);
   assert(observer.detects == 0 && observer.passages == 0);
   port.edge(0,true,30000); port.edge(0,false,35000); port.edge(0,true,40000); port.edge(0,false,45000);
   service.poll(65000,observer); assert(observer.detects == 1 && observer.passages == 1 && observer.start == 30000);
-  // Future queued noise cannot satisfy quiet time using unsigned underflow.
   port.edge(1,true,100001); port.edge(1,false,100500);
   assert(!service.seal(100000,observer) && service.enabled);
   assert(!service.seal(200499,observer)); assert(service.seal(200500,observer));
-  // Microsecond wraparound must preserve qualification and clear deadlines.
   FakeSensors wrapped; wrapped.timeUs = UINT32_MAX-10000;
   SensorService wrap(wrapped); Observer seen; wrap.reset(true);
   wrapped.edge(0,true,UINT32_MAX-5000); wrapped.edge(0,false,1000);
   wrap.poll(21000,seen); assert(seen.detects == 1 && seen.passages == 1 && seen.errors == 0);
-  struct Streaming : FakeSensors {
-    unsigned pops = 0;
-    bool pop(SensorEdge &edge) override {
-      if (!capturing) return false;
-      edge = {0,(pops%2)==0,timeUs+pops*10}; ++pops; return true;
+  // An edge racing the final seal prevents commitment and is processed next tick.
+  struct Racing : FakeSensors {
+    bool race = true;
+    bool sealClear() override { if (race) { race = false; edge(1,true,timeUs); return false; } return FakeSensors::sealClear(); }
+  } racing;
+  FakeIO io; HatchSequence hatches(io); Events events; SensorService sensors(racing); Controller game(hatches,sensors,events);
+  game.phase = Phase::HumanReady; sensors.reset(true);
+  racing.edge(0,true,1000); racing.edge(0,false,6000); events.time = 30; racing.timeUs = 30000; game.tick(30);
+  events.time = 110; racing.timeUs = 110000; game.tick(110); assert(game.moveCount == 0);
+  events.time = 113; racing.timeUs = 113000; game.tick(113); assert(game.phase == Phase::Paused && game.moveCount == 0);
+  // Activity arriving just after a successful seal cannot hide as a new epoch's initial level.
+  struct AfterSeal : FakeSensors {
+    bool sealClear() override {
+      if (!FakeSensors::sealClear()) return false;
+      levels[1] = true; return true;
     }
-  } stream;
-  FakeIO outputs; HatchSequence scheduler(outputs); SensorService storm(stream); Events log;
-  Controller controller(scheduler,storm,log);
-  controller.restart(); controller.command("confirm-clear",0); controller.command("free",0); controller.command("easy",0); controller.command("1",0);
-  for (uint32_t t = 0; t < 1000 && controller.phase != Phase::Paused; ++t) {
-    stream.timeUs = t*1000; log.time = t; controller.tick(t);
-  }
-  assert(controller.phase == Phase::Paused && stream.pops <= Config::EDGE_QUEUE_SIZE+1);
-  assert(discs(controller.board) == 0 && !outputs.enabled);
-  for (const auto &write : outputs.writes) assert(write.channel != 7);
+  } arriving;
+  FakeIO otherIO; HatchSequence otherHatches(otherIO); Events otherEvents;
+  SensorService otherSensors(arriving); Controller otherGame(otherHatches,otherSensors,otherEvents);
+  otherGame.phase = Phase::HumanReady; otherSensors.reset(true);
+  arriving.edge(0,true,1000); arriving.edge(0,false,6000); otherEvents.time = 110; arriving.timeUs = 110000;
+  otherGame.tick(110);
+  assert(otherGame.moveCount == 1 && otherGame.phase == Phase::Paused && !otherIO.enabled);
 }
 static void testRecoveryAndInterruptions() {
-  const Phase phases[] = {Phase::HumanOpening,Phase::HumanReady,Phase::ClosingForRobot,Phase::RobotSearch,
-    Phase::RobotOpening,Phase::RobotBaseline,Phase::IndexerLoading,Phase::IndexerRelease,
-    Phase::RobotConfirm,Phase::RobotQuiet,Phase::RobotClosing};
-  for (Phase phase : phases) for (int action : {0,1,2}) {
-    Fixture f; f.start();
-    if (phase == Phase::HumanOpening || phase == Phase::HumanReady) f.until(phase);
-    else {
-      f.until(Phase::HumanReady); f.line("4\n");
-      if (phase == Phase::RobotQuiet || phase == Phase::RobotClosing) { f.until(Phase::IndexerRelease); f.pulse(uint8_t(f.game.pendingColumn)); }
-      f.until(phase);
+  for (Phase phase : {Phase::StartupPositioning,Phase::HumanOpening,Phase::HumanBaseline,Phase::HumanReady,
+       Phase::HumanConfirm,Phase::RobotSearch,Phase::RobotOpening,Phase::RobotBaseline,Phase::IndexerLoading,
+       Phase::IndexerRelease,Phase::RobotConfirm,Phase::RobotQuiet,Phase::RobotClosing,Phase::IndexerReset}) {
+    for (int action : {0,1,2}) {
+      Fixture f;
+      if (phase == Phase::StartupPositioning) f.game.startup(0);
+      else {
+        f.start();
+        if (phase == Phase::HumanOpening || phase == Phase::HumanBaseline || phase == Phase::HumanReady) f.until(phase);
+        else {
+          f.until(Phase::HumanReady); f.pulse(3);
+          if (phase != Phase::HumanConfirm) {
+            if (phase == Phase::RobotQuiet || phase == Phase::RobotClosing || phase == Phase::IndexerReset) {
+              f.until(Phase::IndexerRelease); f.pulse(uint8_t(f.game.pendingColumn));
+            }
+            f.until(phase);
+          }
+        }
+      }
+      const auto before = f.game.board; const auto writes = f.io.writes.size();
+      if (action == 2) f.game.fault(); else f.line(action == 1 ? "restart\n" : "stop\n"); f.advance(4000);
+      assert(f.game.phase == (action == 2 ? Phase::Fault : action == 1 ? Phase::AwaitClear : Phase::Stopped));
+      assert(equal(before,f.game.board) && f.io.writes.size() == writes && !f.io.enabled && !f.sensors.enabled);
     }
-    const auto before = f.game.board; const int pending = f.game.pendingColumn; const auto writes = f.io.writes.size();
-    if (action == 2) f.game.fault(); else f.line(action == 1 ? "restart\n" : "stop\n"); f.advance(4000);
-    assert(f.game.phase == (action == 2 ? Phase::Fault : action == 1 ? Phase::AwaitClear : Phase::Stopped) && equal(before,f.game.board));
-    assert(f.game.pendingColumn == pending && f.io.writes.size() == writes && !f.io.enabled && !f.sensors.enabled);
-    f.line("confirm-clear\n");
-    if (action == 1) assert(f.game.phase == Phase::ModeSelect && discs(f.game.board) == 0 && f.game.pendingColumn == -1);
   }
   Fixture recovery; toRelease(recovery); recovery.advance(3010);
-  const auto before = recovery.game.board; const auto feed = indexWrites(recovery); const int target = recovery.game.pendingColumn;
-  recovery.line("arm-manual\n"); assert(recovery.game.phase == Phase::Paused);
-  recovery.line("correct\n"); recovery.pulse(uint8_t(target)); assert(equal(before,recovery.game.board));
-  recovery.line("arm-manual\n"); recovery.until(Phase::ManualWait); recovery.pulse(uint8_t(target));
-  recovery.until(Phase::AwaitCorrection); assert(equal(before,recovery.game.board) && indexWrites(recovery) == feed);
+  const auto before = recovery.game.board; const auto releases = indexWrites(recovery,180);
+  const int target = recovery.game.pendingColumn;
+  recovery.line("correct\narm-manual\n"); recovery.until(Phase::ManualWait);
+  recovery.pulse(uint8_t(target)); recovery.until(Phase::AwaitCorrection);
+  assert(equal(before,recovery.game.board) && indexWrites(recovery,180) == releases);
   recovery.line("confirm-correction\n"); recovery.until(Phase::HumanReady);
-  assert(discs(recovery.game.board) == discs(before)+1 && indexWrites(recovery) == feed);
+  assert(discs(recovery.game.board) == discs(before)+1 && indexWrites(recovery,180) == releases);
   recovery.line("confirm-correction\n"); assert(discs(recovery.game.board) == discs(before)+1);
   for (Phase phase : {Phase::Correction,Phase::ManualBaseline,Phase::ManualWait,Phase::AwaitCorrection}) {
     Fixture cancel; toRelease(cancel); cancel.advance(3010); cancel.line("correct\n");
     if (phase != Phase::Correction) cancel.line("arm-manual\n");
     if (phase == Phase::ManualWait || phase == Phase::AwaitCorrection) cancel.until(Phase::ManualWait);
     if (phase == Phase::AwaitCorrection) { cancel.pulse(uint8_t(cancel.game.pendingColumn)); cancel.until(phase); }
-    const auto stored = cancel.game.board; const auto index = indexWrites(cancel);
+    const auto stored = cancel.game.board; const auto writes = cancel.io.writes.size();
     cancel.line("restart\n"); cancel.advance(4000);
-    assert(cancel.game.phase == Phase::AwaitClear && equal(stored,cancel.game.board) && indexWrites(cancel) == index && !cancel.sensors.enabled);
+    assert(cancel.game.phase == Phase::AwaitClear && equal(stored,cancel.game.board) && cancel.io.writes.size() == writes && !cancel.sensors.enabled);
   }
   Fixture extra; toRelease(extra); extra.advance(3010); extra.line("correct\narm-manual\n"); extra.until(Phase::ManualWait);
   extra.pulse(uint8_t(extra.game.pendingColumn)); extra.until(Phase::AwaitCorrection); extra.pulse(uint8_t(extra.game.pendingColumn));
-  assert(extra.game.phase == Phase::Paused && discs(extra.game.board) == 1 && indexWrites(extra) == 2);
-  Fixture fault; toRelease(fault); const auto faultBoard = fault.game.board; fault.io.fail = true; fault.advance(400);
-  assert(fault.game.phase == Phase::Fault && !fault.io.enabled);
-  fault.line("restart\nconfirm-clear\ncorrect\narm-manual\n"); assert(fault.game.phase == Phase::Fault && equal(faultBoard,fault.game.board));
+  assert(extra.game.phase == Phase::Paused && extra.game.moveCount == 1 && indexWrites(extra,180) == 1);
+  Fixture fault; toRelease(fault); fault.io.fail = true; fault.game.fault();
+  fault.line("restart\nconfirm-clear\ncorrect\narm-manual\n"); assert(fault.game.phase == Phase::Fault && !fault.io.enabled);
 }
 static Fixture *interruptFixture = nullptr;
 static bool stopSearch() { interruptFixture->game.command("stop",interruptFixture->time); return false; }
 static bool restartSearch() { interruptFixture->game.restart(); return true; }
 static void testSearchCancellation() {
   for (auto hook : {stopSearch,restartSearch}) {
-    Fixture f; f.humanStart("hard"); f.line("4\n"); f.until(Phase::RobotSearch);
+    Fixture f; f.humanStart("hard"); humanMove(f,3);
     interruptFixture = &f; f.game.keepSearching = hook; f.tick();
-    assert(f.game.phase == (hook == stopSearch ? Phase::Stopped : Phase::AwaitClear) && indexWrites(f) == 0 && !f.io.enabled);
+    assert(f.game.phase == (hook == stopSearch ? Phase::Stopped : Phase::AwaitClear) && indexWrites(f,180) == 0 && !f.io.enabled);
   }
 }
 static void testEndings() {
   Fixture win; win.humanStart(); for (int c = 0; c < 3; ++c) win.game.board.drop(c,'O');
-  win.line("4\n"); const auto final = win.game.board; win.until(Phase::Ended);
-  win.advance(4000); win.line("5\n"); assert(equal(final,win.game.board) && win.events.searches == 0 && indexWrites(win) == 0);
+  win.pulse(3); win.until(Phase::Ended); const auto final = win.game.board;
+  win.advance(4000); win.line("5\n"); assert(equal(final,win.game.board) && win.events.searches == 0 && indexWrites(win,180) == 0);
+  for (int c = 0; c < 7; ++c) assert(win.io.writes[win.io.writes.size()-7+c].angle == Config::HATCHES[c].closed);
   Fixture robot; robot.start("1"); for (int c = 0; c < 3; ++c) robot.game.board.drop(c,'O');
   robot.until(Phase::IndexerRelease); robot.pulse(uint8_t(robot.game.pendingColumn)); robot.until(Phase::Ended);
-  assert(robot.game.result == Game::Result::OWins && discs(robot.game.board) == 4);
+  assert(robot.game.result == Game::Result::OWins && discs(robot.game.board) == 4 && robot.io.writes.back().angle == 110);
   Fixture draw; draw.humanStart(); draw.game.board = drawBoard(); draw.game.board.cells[0][0] = '.';
-  draw.line("1\n"); draw.until(Phase::Ended); assert(draw.game.result == Game::Result::Draw && indexWrites(draw) == 0);
+  draw.pulse(0); draw.until(Phase::Ended); assert(draw.game.result == Game::Result::Draw && indexWrites(draw,180) == 0);
+}
+static void testCompleteGames() {
+  for (const char *level : {"easy","medium","hard"}) for (const char *first : {"0","1"}) {
+    Fixture f; f.start(first,level);
+    for (int ticks = 0; ticks < 200000 && f.game.phase != Phase::Ended; ++ticks) {
+      if (f.game.phase == Phase::HumanReady) {
+        int column = 0; while (column < 7 && !f.game.board.legal(column)) ++column;
+        assert(column < 7); f.pulse(uint8_t(column));
+      } else if (f.game.phase == Phase::IndexerRelease) {
+        f.pulse(uint8_t(f.game.pendingColumn));
+        f.until(Phase::RobotQuiet);
+      } else f.tick();
+      assert(f.game.phase != Phase::Paused && f.game.phase != Phase::Fault);
+    }
+    assert(f.game.phase == Phase::Ended && f.game.moveCount <= 42 && f.game.moveCount == discs(f.game.board));
+    Game::Board replay; unsigned robotMoves = 0;
+    for (unsigned i = 0; i < f.game.moveCount; ++i) {
+      const auto &move = f.game.history[i]; assert(move.symbol == (i%2 ? 'X' : 'O'));
+      assert(replay.drop(move.column-1,move.symbol)); robotMoves += move.symbol == f.game.robot;
+      if (i+1 < f.game.moveCount) assert(replay.result() == Game::Result::Playing);
+    }
+    assert(equal(replay,f.game.board) && indexWrites(f,180) == robotMoves);
+    assert(!f.sensors.enabled && f.io.enabled);
+  }
 }
 int main() {
-  testBoard(); testAI(); testMenusAndInput(); testScheduler(); testSequencing(); testQualification();
-  testSensorFailures(); testRecoveryAndInterruptions(); testSearchCancellation(); testEndings();
-  puts("PASS: game/AI/parser, shared outputs, robot IR qualification, failure pauses, recovery and exactly-once commitment.");
+  testAutomaticStartup(); testBoard(); testAI(); testScheduler(); testHumanSensors(); testSequencing();
+  testQualification(); testSensorFailures(); testRecoveryAndInterruptions(); testSearchCancellation(); testEndings(); testCompleteGames();
+  puts("PASS: startup/holding, game/AI, human and robot IR, target doors, faults, recovery, atomic commitment and endings.");
   return 0;
 }

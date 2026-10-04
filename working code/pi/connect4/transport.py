@@ -57,11 +57,17 @@ class SerialLink:
             self.connected = True
         self.emit({"type": "link", "connected": True})
         next_snapshot = 0
+        started = time.monotonic()
+        received_state = warned = False
         while not self.stopped.is_set():
             now = time.monotonic()
             if now >= next_snapshot:
-                link.write(b"snapshot\n")
+                if link.write(b"snapshot\n") != len(b"snapshot\n"):
+                    raise OSError("Incomplete snapshot request")
                 next_snapshot = now + 2
+            if not received_state and not warned and now - started >= 6:
+                self.emit({"type": "notice", "text": "No ESP32 game snapshot after 6 seconds. Check that the updated game firmware was flashed to this serial device; press ESP32 EN/reset, then type diagnose. USB open alone does not confirm firmware communication."})
+                warned = True
             try:
                 command = self.outbound.get_nowait()
             except queue.Empty:
@@ -75,6 +81,8 @@ class SerialLink:
                         try:
                             event = json.loads(buffer.decode("utf-8"))
                             if isinstance(event, dict) and event.get("v") == 1:
+                                if event.get("type") in ("snapshot", "state", "move"):
+                                    received_state = True
                                 self.emit(event)
                         except (ValueError, UnicodeError):
                             pass  # ESP32 ROM boot text and incomplete reconnect frames.

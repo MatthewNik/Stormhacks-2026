@@ -7,7 +7,8 @@ from . import board as rules
 PHASES = {"AwaitClear", "ModeSelect", "FirstPlayer", "Difficulty", "HumanOpening", "HumanReady",
           "ClosingForRobot", "RobotSearch", "RobotOpening", "RobotBaseline", "IndexerLoading",
           "IndexerRelease", "RobotConfirm", "RobotQuiet", "RobotClosing", "Paused", "Correction",
-          "ManualBaseline", "ManualWait", "AwaitCorrection", "Stopped", "Fault", "Ended", "EndClosing"}
+          "ManualBaseline", "ManualWait", "AwaitCorrection", "Stopped", "Fault", "Ended", "EndClosing",
+          "StartupPositioning", "HumanBaseline", "HumanConfirm", "IndexerReset"}
 STATE_TYPES = {"snapshot", "move", "state"}
 
 

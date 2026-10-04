@@ -17,6 +17,7 @@ struct SerialEvents : GameEvents, ProtocolReply {
       s.column+1,(unsigned long)duration,(unsigned long)s.nodes); tx.push(f);
   }
   void snapshot() override { requested = true; }
+  void diagnostics() override;
   void commandResult(uint32_t request, const char *status) override {
     JsonFrame f; f.add("{\"v\":1,\"type\":\"command_result\",\"request_id\":%lu,\"status\":\"%s\"}\n",
       (unsigned long)request,status); tx.push(f); requested = true;
@@ -47,6 +48,10 @@ GameDisplay screen;
 uint32_t lastBusCheck = 0, lastRevision = UINT32_MAX, sentRevision = UINT32_MAX, sentDropped = 0;
 uint32_t sentGame = UINT32_MAX;
 uint8_t sentMoves = 0;
+
+void SerialEvents::diagnostics() {
+  message(hatches.error());
+}
 
 void pumpSerial() {
   unsigned remaining = 0; const char *data = output.tx.front(remaining);
@@ -89,9 +94,13 @@ void setup() {
   pinMode(Config::BUTTON_LEFT,INPUT_PULLUP); pinMode(Config::BUTTON_RIGHT,INPUT_PULLUP);
   pinMode(Config::BUTTON_CENTRE,INPUT_PULLUP);
   game.bootId = esp_random();
+  Serial.setTxBufferSize(512);
   Serial.begin(Config::SERIAL_BAUD);
+  output.message("Connect Four build 017: motor-compatible PCA control; IR game; no APIs.");
+  // Initialize PCA as in the motor test, before enabling the other peripherals.
+  const bool motorReady = hardware.begin();
   screen.begin(); if (!Config::MENU_ONLY) sensorPort.begin(); game.keepSearching = continueSearch;
-  if (!hardware.begin()) game.fault(); else game.restart();
+  if (!motorReady) game.fault(); else game.startup(millis());
   if (Config::MENU_ONLY) {
     game.command("confirm-clear",millis());
     output.message("MENU TEST ONLY: PCA/sensors disabled; gameplay unavailable.");

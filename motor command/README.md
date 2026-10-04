@@ -12,6 +12,8 @@ off all
 quit
 ```
 
+`servo <0-6> up` and `servo <0-6> down` use calibrated flap defaults; `servo 7 load` and `servo 7 unload` use 110° and 180°. Presets are resolved by ESP32, so Pi holds no duplicate angle table.
+
 `servo <motor> <angle>` accepts motors 0–7 and whole-number angles 0–180. Every valid command moves only the specified output. The angle is nominal command position, not measured shaft feedback. `status` reports last commanded angles and pulse state. `off` removes pulses/holding torque, not electrical power. There is no automatic disc release or motor movement at startup.
 
 The terminal verifies this specific firmware identity before forwarding motor commands and stops all outputs on a new session. It sends a heartbeat every 500 ms. ESP32 disables pulses if no heartbeat or valid servo command arrives for 2 seconds. `quit`, EOF and Ctrl+C attempt `off all` before closing; USB failure/process loss falls back to the ESP32 heartbeat deadline. Disconnected commands are never automatically replayed. Holding continues while the terminal is alive, so send `off` when each check is done. A hardware controller hang is not covered by the software heartbeat.
@@ -24,15 +26,15 @@ Motor numbers are printed PCA connector numbers, not one-based column numbers:
 
 | Motor/PCA | Column from front | Down/closed | Up/open |
 | --- | --- | --- | --- |
-| 0 | 1, rightmost | 50° | 140° |
-| 1 | 2 | 60° | 145° |
-| 2 | 3 | 55° | 140° |
-| 3 | 4, centre | 55° | 147° |
-| 4 | 5 | 55° | 140° |
-| 5 | 6 | 55° | 141° |
-| 6 | 7, leftmost | 70° | 140° |
+| 0 | 1, rightmost | 15° | 115° |
+| 1 | 2 | 8° | 110° |
+| 2 | 3 | 11° | 100° |
+| 3 | 4, centre | 12° | 105° |
+| 4 | 5 | 11° | 100° |
+| 5 | 6 | 12° | 115° |
+| 6 | 7, leftmost | 12° | 110° |
 
-Motor 7 loads the magazine at 80° and unloads/releases at 145°. Outputs 8–15 remain FULL_OFF. Pulse mapping is the same nominal 500–2500 us range used by the Uno calibration and full ESP32 firmware, at approximately 50 Hz with prescaler-aware conversion.
+Motor 7 loads the magazine at 110° and unloads/releases at 180°. Outputs 8–15 remain FULL_OFF. Pulse mapping is the same nominal 500–2500 us range used by the Uno calibration and full ESP32 firmware, at approximately 50 Hz with prescaler-aware conversion.
 
 Remove discs for testing and command one motor at a time. Begin near a known safe position and avoid linkage/hard-stop binding. Multiple commands can leave multiple motors holding; this diagnostic does not run the full game's flap timing or IR safety sequence. Motor 7 is directly commandable, so its mechanism/feed path must be empty before testing.
 
@@ -98,7 +100,7 @@ cd ~/stormhacks-rpi/pi
 .venv/bin/python -m connect4
 ```
 
-The current full package still requires initial `confirm-clear`; handoff 011 records automatic menu startup as a separate next-update request. This motor diagnostic does not change the full game package or implement that pending change.
+The updated full package opens Mode automatically on healthy boot. Restart/recovery clearing remains explicit.
 
 ## Local rebuild and verification
 

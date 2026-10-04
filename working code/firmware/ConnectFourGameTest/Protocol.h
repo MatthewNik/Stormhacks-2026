@@ -12,6 +12,7 @@ inline const char *phaseName(Phase p) {
     PHASE_NAME(RobotConfirm); PHASE_NAME(RobotQuiet); PHASE_NAME(RobotClosing); PHASE_NAME(Paused);
     PHASE_NAME(Correction); PHASE_NAME(ManualBaseline); PHASE_NAME(ManualWait); PHASE_NAME(AwaitCorrection);
     PHASE_NAME(Stopped); PHASE_NAME(Fault); PHASE_NAME(Ended); PHASE_NAME(EndClosing);
+    PHASE_NAME(StartupPositioning); PHASE_NAME(HumanBaseline); PHASE_NAME(HumanConfirm); PHASE_NAME(IndexerReset);
 #undef PHASE_NAME
   }
   return "Unknown";
@@ -81,6 +82,7 @@ struct ProtocolReply {
   virtual ~ProtocolReply() = default;
   virtual void snapshot() = 0;
   virtual void commandResult(uint32_t request, const char *status) = 0;
+  virtual void diagnostics() {}
 };
 class ProtocolReader {
   char buffer[128] = {};
@@ -116,7 +118,11 @@ public:
     while (length && (buffer[length-1] == ' ' || buffer[length-1] == '\t')) buffer[--length] = 0;
     const char *line = buffer; while (*line == ' ' || *line == '\t') ++line;
     if (invalid) events.message("ERROR: oversized or non-ASCII command ignored.");
-    else if (!strcmp(line,"snapshot")) reply.snapshot();
+    else if (!strcmp(line,"snapshot")) {
+      reply.snapshot();
+      if (g.phase == Phase::Fault) reply.diagnostics();
+    }
+    else if (!strcmp(line,"diagnose")) { reply.diagnostics(); reply.snapshot(); }
     else if (!strncmp(line,"status ",7)) {
       uint32_t request = 0;
       const char *p = line+7;
@@ -146,10 +152,7 @@ public:
         else if (v[2] != g.moveCount) status = "stale_turn";
         else if (!beganReady || g.phase != Phase::HumanReady) status = "not_ready";
         else if (v[4] < 1 || v[4] > 7 || !g.board.legal(int(v[4])-1)) status = "illegal_column";
-        else {
-          char column[] = {char('0'+v[4]),0}; g.command(column,now);
-          if (acceptedCount < 42) accepted[acceptedCount++] = request;
-        }
+        else status = "sensor_only";
         reply.commandResult(request,status);
       }
     } else if (*line) {

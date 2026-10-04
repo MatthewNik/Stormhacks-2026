@@ -24,10 +24,10 @@ class FakePort:
 class TerminalTests(unittest.TestCase):
     def test_validation(self):
         self.assertEqual(validate_command(" servo  0 100 "), "servo 0 100")
-        for command in ("servo 7 180", "off 0", "off all", "help", "status", "quit"):
+        for command in ("servo 7 180", "off 0", "off all", "help", "status", "quit", "servo 0 up", "servo 3 down", "servo 7 load", "servo 7 unload"):
             self.assertEqual(validate_command(command), command)
         for command in ("servo 8 90", "servo 0 181", "servo 0 -1", "servo 0 90 extra",
-                        "servo 0 90\noff all", "servo 0 1.5", "ping", "servo 0 999999999999"):
+                        "servo 0 90\noff all", "servo 0 1.5", "ping", "servo 0 999999999999", "servo 7 up", "servo 0 load"):
             with self.assertRaises(ValueError):
                 validate_command(command)
 
