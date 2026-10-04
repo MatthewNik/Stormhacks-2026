@@ -1,0 +1,6 @@
+directories:
+  data: C:/Users/matth/AppData/Local/Arduino15
+  downloads: C:/Users/matth/Documents/Stormhacks2026 Oct 3-4/motor command/build/downloads
+  user: C:/Users/matth/Documents/Stormhacks2026 Oct 3-4/motor command/build/user
+build_cache:
+  path: C:/Users/matth/Documents/Stormhacks2026 Oct 3-4/motor command/build/cache

@@ -1,0 +1,5 @@
+build/
+deployment/
+pi/.venv/
+**/__pycache__/
+**/*.pyc
