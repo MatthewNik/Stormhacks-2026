@@ -2,7 +2,7 @@
 #include <stdint.h>
 
 #ifndef MENU_TEST_ONLY
-#define MENU_TEST_ONLY 0
+#define MENU_TEST_ONLY 1
 #endif
 namespace Config {
 constexpr bool MENU_ONLY = MENU_TEST_ONLY != 0;

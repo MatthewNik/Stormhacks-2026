@@ -1,0 +1,10 @@
+build/
+pi/.env
+pi/.venv/
+pi/logs/
+pi/audio-cache/
+**/__pycache__/
+**/*.pyc
+pi/.pytest_cache/
+
+deployment/

@@ -63,12 +63,13 @@ Pulse expiry removes holding torque. The 3000 ms sensor deadline outlasts the 16
 
 Dependencies: ESP32 core, Adafruit PWM Servo Driver, GFX and BusIO. The bundled SSD1331 driver and its upstream license must stay beside the sketch. Use ESP32 Dev Module and Verify; uploading is manual.
 
-From a Visual Studio developer PowerShell, run `tests/run-native.ps1`. Four native suites cover the existing gameplay/output/sensor/recovery behavior plus three-button wraparound menus, centre confirmation, debounce/held/chord/release handling, tagged move rejection, request deduplication, current-game history, telemetry overflow/escaping and coach opening. Stub tests do not reproduce hardware interrupt latency or electrical behavior.
+From a Visual Studio developer PowerShell, run `tests/run-native.ps1`. Five native suites cover the existing gameplay/output/sensor/recovery behavior plus three-button wraparound menus, centre confirmation, debounce/held/chord/release handling, tagged move rejection, request deduplication, current-game history, telemetry overflow/escaping and coach opening. Stub tests do not reproduce hardware interrupt latency or electrical behavior.
 
 With servo power off, verify clear/mode/difficulty/starter screens and all three buttons, including wraparound, no repeat while held, chord suppression and release between screens. Centre must not acknowledge clearing or recovery. Then perform unloaded checks of all seven sensors, indexer endpoints, clear baselines, correct/extra/wrong/missing passages, manual correction without PCA7 release, and stop/restart/fault behavior. Test Pi USB disconnect and API/audio failure; neither may invent moves or trigger another release. Verify every calibrated hatch opens and closes correctly through PCA9685. Establish mechanical retention and one-disc isolation before any loaded run.
 
 No integrated upload, real chip release, sensor timing qualification or loaded-mechanism validation is established by software checks.
 
-## Menu-only bench build
 
-Run `compile-firmware.ps1 -MenuTest` from the integration folder. Output is `build/esp32-menu-test/ConnectFourGameTest.ino.merged.bin`. This separate build opens the mode menu automatically with a TEST label, leaves OE HIGH, substitutes a motor output implementation that never accesses PCA9685, and does not initialize sensor interrupts. Free Play permits difficulty and starter selection; confirming the starter returns to Mode. Coach confirmation also returns to Mode. No game starts. Left/GPIO13 and Right/GPIO14 browse; Centre/GPIO23 confirms. Each button connects its GPIO to GND when pressed, using the internal pull-up. Release between presses. Normal builds without `-MenuTest` retain PCA fault checks and clearing confirmation.
+## Full hardware deployment
+
+This directory builds only the full hardware version. See [current wiring](../../WIRING.md) and [exact deployment commands](../../DEPLOY.md). The package step checks that MENU_TEST_ONLY=0 was used. The separate button-test directory is not part of these upload steps.

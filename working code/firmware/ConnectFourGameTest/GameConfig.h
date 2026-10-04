@@ -21,6 +21,7 @@ constexpr uint32_t SERVO_DRIVE_MS = 300;
 constexpr uint32_t ROBOT_DRIVE_MS = 1600;
 static_assert(SERVO_DRIVE_MS > 0 && ROBOT_DRIVE_MS <= 2000, "Keep bench servo drive bounded");
 constexpr uint32_t BUS_CHECK_MS = 1000;
+// Column 1/PCA0 is front-right: IR DO34; column 7/PCA6 is front-left: DO27.
 constexpr int SENSOR_PINS[7] = {34,35,36,39,32,33,27};
 constexpr bool SENSOR_ACTIVE_LOW[7] = {true,true,true,true,true,true,true};
 constexpr uint32_t DETECT_US = 2000, CLEAR_US = 20000, STABLE_CLEAR_US = 100000;

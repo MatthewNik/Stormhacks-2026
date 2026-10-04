@@ -1,4 +1,4 @@
-param([string]$Cli = 'C:/Users/matth/AppData/Local/Programs/Arduino IDE/resources/app/lib/backend/resources/arduino-cli.exe', [switch]$MenuTest)
+param([string]$Cli = 'C:/Users/matth/AppData/Local/Programs/Arduino IDE/resources/app/lib/backend/resources/arduino-cli.exe', [switch]$MenuTest = $true)
 $ErrorActionPreference = 'Stop'
 $projectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 if ($projectRoot -ne 'C:\Users\matth\Documents\Stormhacks2026 Oct 3-4') { throw 'Build only in the active hackathon workspace.' }
