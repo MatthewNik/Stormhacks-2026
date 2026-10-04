@@ -1,1 +1,3 @@
 AGENTS.md
+/tmp/connect-four-game-test/*
+!/tmp/connect-four-game-test/arduino-cli.yaml
