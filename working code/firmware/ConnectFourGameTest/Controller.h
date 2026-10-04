@@ -33,13 +33,21 @@ class Controller : public SensorObserver {
     ++generation; outputs.disable(); sensors.reset(false);
     if (outputs.faulted) { fault(); return; }
     setPhase(Phase::Paused); events.message(reason);
-    events.message("Delivery paused; board/pending move frozen. Use correct or restart; no automatic feed retry.");
+    events.message("Paused. Check the machine, then press Centre (or type resume) to continue; restart to start over.");
+  }
+  bool humanPhase() const {
+    return phase == Phase::HumanOpening || phase == Phase::HumanBaseline ||
+           phase == Phase::HumanReady || phase == Phase::HumanConfirm;
+  }
+  void rebaselineHuman() {
+    humanColumn = -1; received = seenDetection = false;
+    sensors.reset(true); setPhase(Phase::HumanBaseline);
   }
   void closeAfterHuman(uint32_t now) {
     result = board.result();
     if (result == Game::Result::Playing) {
-      sensors.reset(true);
-      if (!sensors.clear()) { pause("Sensor active at the human-to-robot boundary"); return; }
+      sensors.reset(Config::ROBOT_IR_CONFIRM);
+      if (Config::ROBOT_IR_CONFIRM && !sensors.clear()) { pause("Sensor active at the human-to-robot boundary"); return; }
       setPhase(Phase::RobotSearch);
     } else {
       outputs.begin(0,now);
@@ -48,7 +56,10 @@ class Controller : public SensorObserver {
     }
   }
   void commit(uint32_t now) {
-    if (pendingColumn < 0 || !received || !sensors.seal(events.nowUs(),*this)) return;
+    if (pendingColumn < 0) return;
+    if (Config::ROBOT_IR_CONFIRM || manual) {
+      if (!received || !sensors.seal(events.nowUs(),*this)) return;
+    }
     if (phase != Phase::RobotClosing && phase != Phase::AwaitCorrection) return;
     const int committedColumn = pendingColumn;
     if (!board.drop(committedColumn,robot)) { pause("Pending column no longer legal"); return; }
@@ -85,7 +96,7 @@ public:
       return;
     }
     human = robotFirst ? 'X' : 'O'; robot = Game::other(human);
-    if (robotFirst) { sensors.reset(true); setPhase(Phase::RobotSearch); }
+    if (robotFirst) { sensors.reset(Config::ROBOT_IR_CONFIRM); setPhase(Phase::RobotSearch); }
     else prepareHuman(now);
   }
   void chooseMode(Mode selected, uint32_t) {
@@ -117,14 +128,15 @@ public:
     setPhase(Phase::AwaitClear);
     command("confirm-clear",now);
   }
+  // Human turn: the first legal-column detection wins; later or stray triggers
+  // are ignored rather than pausing play.
   void detected(uint8_t column, uint32_t startUs) override {
     if (phase == Phase::HumanReady) {
-      if (!board.legal(column)) { pause("Human disc detected in a full column"); return; }
+      if (!board.legal(column)) return;
       humanColumn = column; seenDetection = true; received = false;
       setPhase(Phase::HumanConfirm); return;
     }
-    if (phase == Phase::HumanConfirm) { pause("Extra human disc detected"); return; }
-    if (phase == Phase::HumanBaseline) { pause("Disc detected before human ready"); return; }
+    if (humanPhase()) return;
     if (phase == Phase::RobotBaseline || phase == Phase::ManualBaseline) {
       pause("Disc detected before robot/manual release was armed"); return;
     }
@@ -136,21 +148,36 @@ public:
   }
   void passage(uint8_t column, uint32_t startUs) override {
     if (phase == Phase::HumanConfirm) {
-      if (column != humanColumn || !seenDetection || received) { pause("Unexpected human passage"); return; }
-      received = true; return;
+      if (column == humanColumn && seenDetection) received = true;
+      return;
     }
+    if (humanPhase()) return;
     if (phase == Phase::RobotBaseline || phase == Phase::ManualBaseline) return;
     if (!seenDetection || column != pendingColumn || int32_t(startUs-releaseUs) < 0 || received) {
       pause("Unexpected passage"); return;
     }
     received = true;
   }
-  void sensorProblem(const char *reason) override { pause(reason); }
+  void sensorProblem(const char *reason) override {
+    if (humanPhase() && strcmp(reason,"Sensor stuck active")) { rebaselineHuman(); return; }
+    pause(reason);
+  }
+  // Centre button / "resume": operator confirms the machine is fine.
+  void resume(uint32_t now) {
+    if (phase != Phase::Paused) return;
+    events.message("Resumed by operator.");
+    if (pendingColumn < 0) { prepareHuman(now); return; }
+    outputs.begin(0,now); setPhase(Phase::RobotClosing);
+  }
   void pollSensors() { sensors.poll(events.nowUs(),*this); }
   void command(const char *line, uint32_t now) {
     if (!strcmp(line,"help")) {
       events.message("confirm-clear; free; coach unavailable; easy/medium/hard; 0 human or 1 robot. Human moves: IR only.");
-      events.message("help, board, diagnose, stop, restart; recovery: correct, arm-manual, confirm-correction. Robot moves require IR."); return;
+      events.message("help, board, diagnose, stop, restart, resume (or Centre button when paused); recovery: correct, arm-manual, confirm-correction."); return;
+    }
+    if (!strcmp(line,"resume") || (!strcmp(line,"correct") && phase == Phase::Paused && pendingColumn < 0)) {
+      if (phase == Phase::Paused) resume(now); else events.message("ERROR: resume only applies while paused.");
+      return;
     }
     if (!strcmp(line,"board")) { events.boardChanged(board); return; }
     if (!strcmp(line,"restart")) { restart(); return; }
@@ -219,7 +246,6 @@ public:
         if (!outputs.busy()) { sensors.reset(true); setPhase(Phase::HumanBaseline); } break;
       case Phase::HumanBaseline:
         if (sensors.stableClear(events.nowUs())) { setPhase(Phase::HumanReady); events.message("Human turn: insert ONE disc; IR registers its column."); }
-        else if (elapsed >= Config::BASELINE_TIMEOUT_MS) pause("Human sensors did not establish a clear baseline");
         break;
       case Phase::HumanConfirm:
         if (received && sensors.stableClear(events.nowUs())) {
@@ -227,7 +253,7 @@ public:
           if (!board.drop(humanColumn,human)) { pause("Human column no longer legal"); break; }
           recordMove(humanColumn,human); humanColumn = -1;
           events.boardChanged(board); closeAfterHuman(now);
-        } else if (elapsed >= Config::PASSAGE_TIMEOUT_MS) pause("Human passage did not settle");
+        }
         break;
       case Phase::ClosingForRobot:
         if (!outputs.busy()) { sensors.reset(true); setPhase(Phase::RobotSearch); } break;
@@ -249,6 +275,7 @@ public:
         events.searchDone(choice,uint32_t(events.now()-started)); pendingColumn = choice.column;
         if (!board.legal(pendingColumn)) { pause("No legal robot column"); return; }
         manual = received = seenDetection = false;
+        if (!Config::ROBOT_IR_CONFIRM) sensors.reset(false);
         if (!Config::HATCH_ENABLED[pendingColumn]) events.message("Selected hatch isolated: software/IR bench confirmation only.");
         outputs.begin(uint8_t(1 << pendingColumn),events.now());
         setPhase(Phase::RobotOpening); break;
@@ -256,7 +283,7 @@ public:
       case Phase::RobotOpening:
         if (!outputs.busy()) setPhase(Phase::RobotBaseline); break;
       case Phase::RobotBaseline: case Phase::ManualBaseline:
-        if (sensors.stableClear(events.nowUs())) {
+        if ((!Config::ROBOT_IR_CONFIRM && !manual) || sensors.stableClear(events.nowUs())) {
           received = seenDetection = false;
           if (manual) {
             releaseMs = now; releaseUs = events.nowUs(); setPhase(Phase::ManualWait);
@@ -269,14 +296,21 @@ public:
         break;
       case Phase::IndexerLoading:
         if (elapsed >= Config::INDEXER_SETTLE_MS+Config::INDEXER_LOAD_MS) {
-          if (!sensors.clear()) { pause("Sensor active before release"); return; }
+          if (Config::ROBOT_IR_CONFIRM && !sensors.clear()) { pause("Sensor active before release"); return; }
           // The post-write timestamp is conservative: pre-command activity cannot count.
           if (!outputs.command(7,Config::INDEXER.closed,now)) { fault(); return; }
           releaseMs = events.now(); releaseUs = events.nowUs(); setPhase(Phase::IndexerRelease);
-          events.message("Indexer 180: release; waiting for target IR passage.");
+          events.message(Config::ROBOT_IR_CONFIRM ? "Indexer 180: release; waiting for target IR passage."
+                                                  : "Indexer 180: release.");
         } break;
       case Phase::IndexerRelease:
-        if (elapsed >= Config::INDEXER_SETTLE_MS) setPhase(Phase::RobotConfirm); break;
+        if (Config::ROBOT_IR_CONFIRM) { if (elapsed >= Config::INDEXER_SETTLE_MS) setPhase(Phase::RobotConfirm); }
+        else if (elapsed >= Config::INDEXER_SETTLE_MS+Config::ROBOT_DROP_MS) {
+          if (!outputs.command(7,Config::INDEXER.open,now)) { fault(); return; }
+          events.message("Indexer 110: back to load.");
+          outputs.begin(0,now); setPhase(Phase::RobotClosing);
+        }
+        break;
       case Phase::RobotConfirm: case Phase::ManualWait:
         if (received) setPhase(Phase::RobotQuiet);
         else if (uint32_t(now-releaseMs) >= Config::PASSAGE_TIMEOUT_MS) pause("Robot passage timeout; no automatic retry");

@@ -104,7 +104,7 @@ void setup() {
   game.bootId = esp_random();
   Serial.setTxBufferSize(512);
   Serial.begin(Config::SERIAL_BAUD);
-  output.message("Connect Four build 019: timer-sampled IR; staggered hatches; PCA I2C retries; no APIs.");
+  output.message("Connect Four build 021: lenient human IR, Centre resumes pause; timed robot drop; timer-sampled IR; staggered hatches; PCA I2C retries; no APIs.");
   // Initialize PCA as in the motor test, before enabling the other peripherals.
   const bool motorReady = hardware.begin();
   screen.begin(); game.keepSearching = continueSearch;

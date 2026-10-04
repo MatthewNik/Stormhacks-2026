@@ -12,7 +12,7 @@ def context_for(state):
     return state["boot_id"], state["game_id"], state["move_number"]
 
 COMMANDS = {"help", "board", "stop", "restart", "confirm-clear", "correct", "arm-manual",
-            "confirm-correction", "free", "coach", "easy", "medium", "hard", "0", "1", "snapshot", "diagnose"}
+            "confirm-correction", "resume", "free", "coach", "easy", "medium", "hard", "0", "1", "snapshot", "diagnose"}
 
 
 class Application:
@@ -72,9 +72,10 @@ class Application:
 
     def print_state(self, state):
         self.print(f"\n{state['mode']} | {state['phase']} | move {state['move_number']} | {state['result']}")
-        self.print("  1 2 3 4 5 6 7")
+        # Column 1 is the front-right of the machine, so print right-to-left.
+        self.print("  7 6 5 4 3 2 1")
         for row in state["board"]:
-            self.print("| " + " ".join(row) + " |")
+            self.print("| " + " ".join(row[::-1]) + " |")
         if state["pending_column"]:
             self.print(f"Pending robot column: {state['pending_column']} (not committed)")
         if state["phase"] == "HumanReady":

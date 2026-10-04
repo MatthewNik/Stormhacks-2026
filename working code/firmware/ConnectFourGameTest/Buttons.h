@@ -39,7 +39,7 @@ public:
     } else if (game.phase == Phase::FirstPlayer) {
       if (l == ButtonAction::Press || r == ButtonAction::Press) { game.robotFirst = !game.robotFirst; ++game.revision; }
       else if (c == ButtonAction::Press) game.beginPlay(now);
-    }
+    } else if (game.phase == Phase::Paused && c == ButtonAction::Press) game.resume(now);
     if (observed != game.phase) { observed = game.phase; armed = false; }
   }
 };

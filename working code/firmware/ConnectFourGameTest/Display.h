@@ -67,7 +67,7 @@ public:
       case Phase::RobotConfirm: status = "Waiting for IR"; break;
       case Phase::RobotQuiet: status = "IR: quiet check"; break;
       case Phase::RobotClosing: status = "Robot: closing"; break;
-      case Phase::Paused: status = "PAUSE: correct"; break;
+      case Phase::Paused: status = "PAUSE: Centre=OK"; break;
       case Phase::Correction: status = "arm-manual"; break;
       case Phase::ManualBaseline: status = "IR: clear check"; break;
       case Phase::ManualWait: status = "Manual target IR"; break;
