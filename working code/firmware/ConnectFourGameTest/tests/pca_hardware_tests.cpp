@@ -7,6 +7,7 @@
 static void resetBus() {
   Wire = TwoWire{}; pwmWrites.clear(); oeLevel = HIGH;
   driverBeginOK = pwmWriteOK = frequencyOK = true;
+  pwmFailNext = 0;
 }
 struct QuietEvents : GameEvents {
   uint32_t time = 0;
@@ -95,5 +96,31 @@ int main() {
   assert(!compatible.healthy() && strstr(compatible.error(),"register 0xFE select failed"));
   resetBus(); Wire.emptyRead = true; PcaHardware missingByte;
   assert(!missingByte.begin() && strstr(missingByte.error(),"register 0xFE byte missing"));
+  // One transient write NACK is retried; two in a row still fail the write.
+  resetBus(); PcaHardware retrying; assert(retrying.begin());
+  pwmFailNext = 1; assert(retrying.writeAngle(0,0) && pwmWrites.back().off == 102 && pwmFailNext == 0);
+  pwmFailNext = 1; assert(retrying.stopChannel(3) && pwmWrites.back().off == 4096);
+  pwmFailNext = 2; assert(!retrying.writeAngle(1,0) && strstr(retrying.error(),"motor position write failed"));
+  // Health monitoring tolerates isolated misses but faults on PCA_HEALTH_MISSES consecutive ones.
+  resetBus(); PcaHardware monitored; assert(monitored.begin());
+  Wire.ack = false;
+  for (unsigned i = 1; i < Config::PCA_HEALTH_MISSES; ++i) assert(monitored.monitor() && monitored.misses == i);
+  Wire.ack = true; assert(monitored.monitor() && monitored.misses == 0);
+  assert(strstr(monitored.error(),"no failure recorded"));
+  assert(strstr(monitored.error(),"Health-check misses this boot=2"));
+  assert(strstr(monitored.error(),"last recovered: PCA detail: register 0xFE select failed"));
+  Wire.ack = false;
+  for (unsigned i = 1; i < Config::PCA_HEALTH_MISSES; ++i) assert(monitored.monitor());
+  assert(!monitored.monitor());
+  assert(strstr(monitored.error(),"register 0xFE select failed") && strstr(monitored.error(),"3 consecutive health misses"));
+  assert(strstr(monitored.error(),"Health-check misses this boot=5"));
+  // A wrong prescaler (PCA reset/brownout) that persists also faults after the same count.
+  resetBus(); PcaHardware rebooted; assert(rebooted.begin()); Wire.registers[0xfe] = 0x1e;
+  for (unsigned i = 1; i < Config::PCA_HEALTH_MISSES; ++i) assert(rebooted.monitor());
+  assert(!rebooted.monitor() && strstr(rebooted.error(),"PWM prescaler changed"));
+  // An already recorded failure is never discarded by a later monitor call.
+  resetBus(); PcaHardware latched; assert(latched.begin());
+  pwmWriteOK = false; assert(!latched.writeAngle(0,0)); pwmWriteOK = true;
+  Wire.ack = false; assert(!latched.monitor() && strstr(latched.error(),"motor position write failed"));
   puts("PASS: PCA initialization, full-off channels, pulse conversion, configuration/read/write faults and OE disabling.");
 }

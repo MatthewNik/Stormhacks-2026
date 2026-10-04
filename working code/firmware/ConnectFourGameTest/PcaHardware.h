@@ -4,11 +4,13 @@
 #include <Adafruit_PWMServoDriver.h>
 #include "Hatch.h"
 #include <stdio.h>
+#include <string.h>
 
 class PcaHardware : public HatchIO {
   Adafruit_PWMServoDriver driver{Config::PCA_ADDRESS, Wire};
   uint8_t prescale = 0;
-  char failure[160] = {};
+  char failure[160] = {}, lastMiss[160] = {};
+  mutable char summary[400] = {};
   bool fail(const char *step, int code = -1, int observed = -1) {
     // Preserve the first failure; shutdown writes must not replace its cause.
     if (!failure[0]) snprintf(failure,sizeof(failure),"PCA detail: %s; address=0x%02X SDA=%d SCL=%d code=%d observed=%d",
@@ -47,12 +49,25 @@ class PcaHardware : public HatchIO {
     }
     value = uint8_t(data); return true;
   }
+  // PCA register writes are absolute, so one immediate retry is safe after a transient NACK.
+  uint8_t writePWM(uint8_t channel, uint16_t on, uint16_t off) {
+    const uint8_t status = driver.setPWM(channel,on,off);
+    return status == 0 ? 0 : driver.setPWM(channel,on,off);
+  }
 public:
-  const char *error() const override { return failure[0] ? failure : "PCA detail: no failure recorded."; }
+  unsigned misses = 0;
+  uint32_t transientMisses = 0;
+  const char *error() const override {
+    const char *detail = failure[0] ? failure : "PCA detail: no failure recorded.";
+    if (!transientMisses) return detail;
+    snprintf(summary,sizeof(summary),"%s Health-check misses this boot=%lu; last recovered: %s",
+      detail,(unsigned long)transientMisses,lastMiss[0] ? lastMiss : "none");
+    return summary;
+  }
   void enable(bool enabled) override { digitalWrite(Config::OE, enabled ? LOW : HIGH); }
   bool stopChannel(uint8_t channel) override {
     if (channel >= 8) return fail("invalid stop channel",-1,channel);
-    const int status = driver.setPWM(channel,0,4096);
+    const int status = writePWM(channel,0,4096);
     return status == 0 || fail("channel FULL_OFF write failed",status,channel);
   }
   bool begin() {
@@ -79,7 +94,7 @@ public:
     if (!healthy()) return false;
     // FULL_OFF survives subsequent OE enabling; channels 8-15 are never commanded.
     for (uint8_t ch = 0; ch < 16; ++ch) {
-      const int status = driver.setPWM(ch,0,4096);
+      const int status = writePWM(ch,0,4096);
       if (status != 0) return fail("startup FULL_OFF write failed",status,ch);
     }
     return true;
@@ -92,6 +107,22 @@ public:
     if (mode & 0x10) return fail("PCA remained in sleep mode",-1,mode);
     return true;
   }
+  // Periodic check: a failure only faults after PCA_HEALTH_MISSES consecutive misses.
+  // Earlier misses are kept as diagnostics without latching the failure detail.
+  bool monitor() {
+    const bool recorded = failure[0] != 0;
+    if (healthy()) { misses = 0; return true; }
+    if (recorded) return false; // never discard an earlier, unrelated failure detail
+    ++transientMisses;
+    if (++misses >= Config::PCA_HEALTH_MISSES) {
+      char reason[48];
+      snprintf(reason,sizeof(reason)," (%u consecutive health misses)",misses);
+      strncat(failure,reason,sizeof(failure)-strlen(failure)-1);
+      return false;
+    }
+    memcpy(lastMiss,failure,sizeof(lastMiss)); failure[0] = 0;
+    return true;
+  }
   bool writeAngle(uint8_t channel, uint16_t angle) override {
     if (channel >= 8 || angle > 180) return fail("invalid motor command",channel,angle);
     if (channel < 7 && !Config::HATCH_ENABLED[channel]) return stopChannel(channel);
@@ -100,7 +131,7 @@ public:
     const uint64_t numerator = uint64_t(us)*Config::OSCILLATOR_HZ;
     const uint64_t denominator = uint64_t(prescale+1)*1000000;
     const uint16_t ticks = uint16_t((numerator+denominator/2)/denominator);
-    const int status = driver.setPWM(channel,0,ticks);
+    const int status = writePWM(channel,0,ticks);
     return status == 0 || fail("motor position write failed",status,channel);
   }
 };

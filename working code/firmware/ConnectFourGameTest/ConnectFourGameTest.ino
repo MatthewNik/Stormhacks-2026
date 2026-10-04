@@ -32,7 +32,8 @@ struct MenuTestHardware : HatchIO {
   bool stopChannel(uint8_t) override { return true; }
   void enable(bool) override {}
   bool begin() { return true; }
-  bool healthy() { return true; }
+  bool monitor() { return true; }
+  unsigned misses = 0;
 } hardware;
 #else
 PcaHardware hardware;
@@ -77,8 +78,10 @@ void readCommands() {
 }
 void checkBus() {
   const uint32_t now = millis();
-  if (game.phase != Phase::Fault && uint32_t(now-lastBusCheck) >= Config::BUS_CHECK_MS) {
-    lastBusCheck = now; if (!hardware.healthy()) game.fault();
+  // After a miss, re-check soon so a real failure still faults within ~40 ms.
+  const uint32_t interval = hardware.misses ? Config::BUS_RETRY_MS : Config::BUS_CHECK_MS;
+  if (game.phase != Phase::Fault && uint32_t(now-lastBusCheck) >= interval) {
+    lastBusCheck = now; if (!hardware.monitor()) game.fault();
   }
 }
 void pollButtons() {
@@ -96,11 +99,13 @@ void setup() {
   game.bootId = esp_random();
   Serial.setTxBufferSize(512);
   Serial.begin(Config::SERIAL_BAUD);
-  output.message("Connect Four build 017: motor-compatible PCA control; IR game; no APIs.");
+  output.message("Connect Four build 019: debounced IR sampler; tolerant PCA health check; no APIs.");
   // Initialize PCA as in the motor test, before enabling the other peripherals.
   const bool motorReady = hardware.begin();
-  screen.begin(); if (!Config::MENU_ONLY) sensorPort.begin(); game.keepSearching = continueSearch;
-  if (!motorReady) game.fault(); else game.startup(millis());
+  screen.begin(); game.keepSearching = continueSearch;
+  const bool sensorsReady = Config::MENU_ONLY || sensorPort.begin();
+  if (!sensorsReady) output.message("ERROR: IR sampler timer failed to start; gameplay disabled.");
+  if (!motorReady || !sensorsReady) game.fault(); else game.startup(millis());
   if (Config::MENU_ONLY) {
     game.command("confirm-clear",millis());
     output.message("MENU TEST ONLY: PCA/sensors disabled; gameplay unavailable.");
