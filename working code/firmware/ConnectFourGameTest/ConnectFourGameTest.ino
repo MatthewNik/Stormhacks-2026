@@ -33,6 +33,7 @@ struct MenuTestHardware : HatchIO {
   void enable(bool) override {}
   bool begin() { return true; }
   bool healthy() { return true; }
+  unsigned retries() const { return 0; }
 } hardware;
 #else
 PcaHardware hardware;
@@ -48,6 +49,7 @@ GameDisplay screen;
 uint32_t lastBusCheck = 0, lastRevision = UINT32_MAX, sentRevision = UINT32_MAX, sentDropped = 0;
 uint32_t sentGame = UINT32_MAX;
 uint8_t sentMoves = 0;
+unsigned reportedRetries = 0;
 
 void SerialEvents::diagnostics() {
   message(hatches.error());
@@ -78,7 +80,13 @@ void readCommands() {
 void checkBus() {
   const uint32_t now = millis();
   if (game.phase != Phase::Fault && uint32_t(now-lastBusCheck) >= Config::BUS_CHECK_MS) {
-    lastBusCheck = now; if (!hardware.healthy()) game.fault();
+    lastBusCheck = now; if (!hardware.healthy()) { game.fault(); return; }
+    if (hardware.retries() != reportedRetries) {
+      reportedRetries = hardware.retries();
+      char text[96];
+      snprintf(text,sizeof(text),"WARNING: PCA I2C retried %u time(s) since boot; check servo supply/ground wiring.",reportedRetries);
+      output.message(text);
+    }
   }
 }
 void pollButtons() {
@@ -96,11 +104,14 @@ void setup() {
   game.bootId = esp_random();
   Serial.setTxBufferSize(512);
   Serial.begin(Config::SERIAL_BAUD);
-  output.message("Connect Four build 017: motor-compatible PCA control; IR game; no APIs.");
+  output.message("Connect Four build 019: timer-sampled IR; staggered hatches; PCA I2C retries; no APIs.");
   // Initialize PCA as in the motor test, before enabling the other peripherals.
   const bool motorReady = hardware.begin();
-  screen.begin(); if (!Config::MENU_ONLY) sensorPort.begin(); game.keepSearching = continueSearch;
-  if (!motorReady) game.fault(); else game.startup(millis());
+  screen.begin(); game.keepSearching = continueSearch;
+  bool sensorsReady = true;
+  if (!Config::MENU_ONLY) { sensorPort.begin(); sensorsReady = sensorPort.running(); }
+  if (!sensorsReady) output.message("ERROR: IR sampling timer unavailable; outputs disabled.");
+  if (!motorReady || !sensorsReady) game.fault(); else game.startup(millis());
   if (Config::MENU_ONLY) {
     game.command("confirm-clear",millis());
     output.message("MENU TEST ONLY: PCA/sensors disabled; gameplay unavailable.");

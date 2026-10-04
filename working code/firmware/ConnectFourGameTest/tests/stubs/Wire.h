@@ -10,6 +10,9 @@ struct TwoWire {
   int sda = -1, scl = -1, timeout = 0;
   uint32_t frequency = 0;
   unsigned stoppedSelections = 0, repeatedReads = 0;
+  unsigned failReads = 0;   // next N requestFrom calls return no bytes
+  int corruptNext = -1;     // next read() returns this value once
+
   bool begin(int data, int clock, uint32_t hz = 0) { sda = data; scl = clock; frequency = hz; return beginOK; }
   void setTimeOut(int value) { timeout = value; }
   void beginTransmission(uint8_t) { buffered = nonStop = false; }
@@ -30,8 +33,12 @@ struct TwoWire {
       if (rejectRepeatedStart || !pointerAck) return 0;
       selected = pendingRegister; buffered = false;
     }
+    if (failReads) { --failReads; return 0; }
     return !ack || shortRead ? 0 : 1;
   }
-  int read() { return emptyRead ? -1 : registers[selected]; }
+  int read() {
+    if (corruptNext >= 0) { const int value = corruptNext; corruptNext = -1; return value; }
+    return emptyRead ? -1 : registers[selected];
+  }
 };
 inline TwoWire Wire;

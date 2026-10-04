@@ -160,11 +160,11 @@ static void testAutomaticStartup() {
   f.until(Phase::ModeSelect);
   assert(f.game.gameId == 1 && f.game.moveCount == 0 && f.io.writes.size() == 8);
   for (int c = 0; c < 8; ++c) {
-    assert(f.io.writes[c].channel == c && f.io.writes[c].time == uint32_t(c*50));
+    assert(f.io.writes[c].channel == c && f.io.writes[c].time == uint32_t(c*Config::COMMAND_GAP_MS));
     assert(f.io.writes[c].angle == (c == 7 ? 110 : Config::HATCHES[c].open));
     assert(f.io.pulses[c]);
   }
-  assert(f.time >= 650 && f.io.enabled);
+  assert(f.time >= 7*Config::COMMAND_GAP_MS+Config::SETTLE_MS && f.io.enabled);
   const auto count = f.io.writes.size();
   f.advance(5000); assert(f.io.writes.size() == count && f.io.enabled);
   f.line("coach\n"); assert(f.game.phase == Phase::ModeSelect && f.game.mode == Mode::FreePlay);
@@ -176,16 +176,16 @@ static void testAutomaticStartup() {
 }
 static void testScheduler() {
   FakeIO io; HatchSequence seq(io); seq.beginStartup(0);
-  for (uint32_t t = 0; t <= 650; ++t) { io.time = t; seq.tick(t); }
+  for (uint32_t t = 0; t <= 7*Config::COMMAND_GAP_MS+Config::SETTLE_MS; ++t) { io.time = t; seq.tick(t); }
   assert(!seq.busy() && io.writes.size() == 8 && io.enabled);
   seq.tick(100000); for (bool pulse : io.pulses) assert(pulse);
   seq.begin(1 << 4,100000);
-  for (uint32_t dt = 0; dt <= 600; ++dt) { io.time = 100000+dt; seq.tick(io.time); }
+  for (uint32_t dt = 0; dt <= 6*Config::COMMAND_GAP_MS+Config::SETTLE_MS; ++dt) { io.time = 100000+dt; seq.tick(io.time); }
   for (int c = 0; c < 7; ++c) assert(io.writes[8+c].angle == (c == 4 ? Config::HATCHES[c].open : Config::HATCHES[c].closed));
   assert(io.pulses[7]); seq.disable(); assert(!io.enabled);
   for (bool pulse : io.pulses) assert(!pulse);
   seq.begin(0,UINT32_MAX-100);
-  for (uint32_t dt = 0; dt <= 600; ++dt) seq.tick(uint32_t(UINT32_MAX-100+dt));
+  for (uint32_t dt = 0; dt <= 6*Config::COMMAND_GAP_MS+Config::SETTLE_MS; ++dt) seq.tick(uint32_t(UINT32_MAX-100+dt));
   assert(!seq.busy() && io.enabled);
   io.fail = true; assert(!seq.command(7,110,4000) && seq.faulted && !io.enabled);
 }

@@ -6,7 +6,7 @@
 #include <string>
 static void resetBus() {
   Wire = TwoWire{}; pwmWrites.clear(); oeLevel = HIGH;
-  driverBeginOK = pwmWriteOK = frequencyOK = true;
+  driverBeginOK = pwmWriteOK = frequencyOK = true; pwmFailures = 0;
 }
 struct QuietEvents : GameEvents {
   uint32_t time = 0;
@@ -41,8 +41,8 @@ int main() {
   HatchSequence hatches(io); QuietEvents events; ClearSensors port; SensorService sensors(port);
   Controller game(hatches,sensors,events);
   game.restart(); game.command("confirm-clear",0);
-  for (uint32_t t = 0; t <= 650; ++t) { events.time = t; game.tick(t); }
-  game.command("free",651); game.command("easy",0); game.command("1",0);
+  for (uint32_t t = 0; t <= 7*Config::COMMAND_GAP_MS+Config::SETTLE_MS; ++t) { events.time = t; game.tick(t); }
+  game.command("free",7*Config::COMMAND_GAP_MS+Config::SETTLE_MS+1); game.command("easy",0); game.command("1",0);
   for (uint32_t t = 0; t < 3000; ++t) { events.time = t; game.tick(t); }
   for (size_t i = 16; i < pwmWrites.size(); ++i) assert(pwmWrites[i].channel < 8);
   for (uint8_t channel = 2; channel <= 4; ++channel) {
@@ -95,5 +95,21 @@ int main() {
   assert(!compatible.healthy() && strstr(compatible.error(),"register 0xFE select failed"));
   resetBus(); Wire.emptyRead = true; PcaHardware missingByte;
   assert(!missingByte.begin() && strstr(missingByte.error(),"register 0xFE byte missing"));
-  puts("PASS: PCA initialization, full-off channels, pulse conversion, configuration/read/write faults and OE disabling.");
+  // One disturbed transaction (combined and STOP read both empty) is retried.
+  resetBus(); PcaHardware transient; assert(transient.begin() && transient.retries() == 0);
+  Wire.failReads = 2; assert(transient.healthy() && transient.retries() == 1);
+  pwmFailures = 2; assert(transient.writeAngle(3,105) && pwmWrites.back().channel == 3 && transient.retries() == 3);
+  assert(strstr(transient.error(),"no failure recorded"));
+  // A bus that stays broken still latches after the bounded attempts.
+  Wire.failReads = 1000; assert(!transient.healthy() && strstr(transient.error(),"register 0xFE read failed"));
+  assert(strstr(transient.error(),"retries="));
+  resetBus(); PcaHardware deadWrite; assert(deadWrite.begin());
+  pwmFailures = Config::PCA_IO_ATTEMPTS; assert(!deadWrite.writeAngle(0,15) && strstr(deadWrite.error(),"motor position write failed"));
+  // One corrupted register byte is re-read rather than trusted.
+  resetBus(); PcaHardware glitch; assert(glitch.begin());
+  Wire.corruptNext = 0x1E; assert(glitch.healthy());
+  // A confirmed power-on prescaler identifies a PCA reset/brownout.
+  resetBus(); PcaHardware browned; assert(browned.begin()); Wire.registers[0xfe] = 0x1E; Wire.registers[0] = 0x11;
+  assert(!browned.healthy() && strstr(browned.error(),"PCA reset detected"));
+  puts("PASS: PCA initialization, full-off channels, pulse conversion, bounded I2C retries, reset detection, read/write faults and OE disabling.");
 }

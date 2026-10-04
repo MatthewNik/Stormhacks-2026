@@ -14,11 +14,27 @@ using portMUX_TYPE = int;
 inline uint32_t fakeMicros = 0;
 inline int pinLevels[40] = {};
 inline unsigned pinReads = 0;
-inline void (*interrupts[40])(void *) = {};
-inline void *interruptContexts[40] = {};
+inline int pinModes[40] = {};
+inline unsigned delayedUs = 0;
 inline uint32_t micros() { return fakeMicros; }
-inline void pinMode(int, int) {}
+inline void delayMicroseconds(unsigned us) { delayedUs += us; }
+inline void pinMode(int pin, int mode) { pinModes[pin] = mode+1; }
 inline int digitalRead(int pin) { ++pinReads; return pinLevels[pin]; }
-inline void attachInterruptArg(int pin, void (*handler)(void *), void *ctx, int) {
-  interrupts[pin] = handler; interruptContexts[pin] = ctx;
+struct hw_timer_t { uint32_t frequency; };
+inline hw_timer_t fakeTimer{};
+inline bool timerAvailable = true;
+inline void (*timerCallback)(void *) = nullptr;
+inline void *timerArg = nullptr;
+inline uint64_t timerAlarmTicks = 0;
+inline bool timerAutoReload = false;
+inline hw_timer_t *timerBegin(uint32_t frequency) {
+  if (!timerAvailable) return nullptr;
+  fakeTimer.frequency = frequency; return &fakeTimer;
 }
+inline void timerAttachInterruptArg(hw_timer_t *, void (*handler)(void *), void *arg) {
+  timerCallback = handler; timerArg = arg;
+}
+inline void timerAlarm(hw_timer_t *, uint64_t ticks, bool reload, uint64_t) {
+  timerAlarmTicks = ticks; timerAutoReload = reload;
+}
+inline void fireTimer() { timerCallback(timerArg); }

@@ -15,14 +15,24 @@ constexpr int BUTTON_LEFT = 13, BUTTON_RIGHT = 14, BUTTON_CENTRE = 23;
 constexpr uint32_t BUTTON_DEBOUNCE_MS = 30;
 constexpr uint32_t OSCILLATOR_HZ = 25000000;
 constexpr float PWM_HZ = 50;
-// Stagger flap command starts by at least 50 ms; motor 7 has separate feed sequencing.
-constexpr uint32_t COMMAND_GAP_MS = 50, SETTLE_MS = 300;
+// Stagger flap command starts so no more than about two servos travel at once;
+// six hatches closing together can disturb the servo supply, ground and PCA bus.
+// Motor 7 has separate feed sequencing.
+constexpr uint32_t COMMAND_GAP_MS = 150, SETTLE_MS = 300;
+// Bounded I2C attempts per PCA register access; a single corrupted transaction
+// during servo current spikes must not latch a fault on its own.
+constexpr unsigned PCA_IO_ATTEMPTS = 3;
 // Calibrated servos hold their commanded positions until stop/fault disables OE.
 constexpr uint32_t BUS_CHECK_MS = 1000;
 // Column 1/PCA0 is front-right: IR DO34; column 7/PCA6 is front-left: DO27.
 constexpr int SENSOR_PINS[7] = {34,35,36,39,32,33,27};
 constexpr bool SENSOR_ACTIVE_LOW[7] = {true,true,true,true,true,true,true};
 constexpr uint32_t DETECT_US = 2000, CLEAR_US = 20000, STABLE_CLEAR_US = 100000;
+// Commit an IR level only after it has been unchanged this long. Equal to the
+// minimum detection, so comparator chatter cannot fill the edge queue.
+constexpr uint32_t SENSOR_DEBOUNCE_US = DETECT_US;
+// IR sampling period; eight samples fit inside one debounce interval.
+constexpr uint32_t SENSOR_SAMPLE_US = 250;
 constexpr uint32_t STUCK_US = 1000000, BASELINE_TIMEOUT_MS = 2000, PASSAGE_TIMEOUT_MS = 3000;
 constexpr uint32_t INDEXER_SETTLE_MS = 300, INDEXER_LOAD_MS = 500;
 constexpr unsigned EDGE_QUEUE_SIZE = 64;

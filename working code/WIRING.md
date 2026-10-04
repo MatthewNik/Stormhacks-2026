@@ -16,7 +16,7 @@ Columns are numbered right to left. Sensor DO and motor output must refer to the
 | Second from left | 6 | 5 | 33 (D33) | 12° | 115° |
 | Leftmost | 7 | 6 | 27 (D27) | 12° | 110° |
 
-PCA7 is the single magazine indexer: load 110°, unload/release 180°. PCA8–15 remain disabled. All seven hatch outputs are enabled. Servo PWM mapping is 50 Hz, 500–2500 us. Flap command starts are staggered by at least 50 ms; motor 7 retains its separate delivery sequence. Startup commands all doors open then PCA7 loaded with at least 50 ms spacing. Position signals remain active until stop/restart/fault disables outputs.
+PCA7 is the single magazine indexer: load 110°, unload/release 180°. PCA8–15 remain disabled. All seven hatch outputs are enabled. Servo PWM mapping is 50 Hz, 500–2500 us. Flap command starts are staggered by at least 150 ms; motor 7 retains its separate delivery sequence. Startup commands all doors open then PCA7 loaded with at least 150 ms spacing. Position signals remain active until stop/restart/fault disables outputs.
 
 ## PCA9685 and motor power
 
